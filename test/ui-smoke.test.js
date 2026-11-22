@@ -58,6 +58,24 @@ runSuite('界面冒烟', {
     check.deepEqual(planRows(), [5], '范围只给一行就只填一行');
     check.match(app.el('infoBox').innerHTML, /多出来的 1 户没有填/, '超出范围要说清楚');
 
+    // 填反之后：框里的数字不动，但重算不能再把它当授权（历史上踩过）
+    app.el('rowFrom').value = '9';
+    app.el('rowTo').value = '7';
+    app.fire('rowFrom', 'input');
+    app.el('openBox').value = '甲 10';
+    app.fire('openBox', 'input');
+    check.deepEqual(planRows(), [3, 4], '填反之后重算仍走自动判断');
+    check.equal(/多出来的/.test(app.el('infoBox').innerHTML), false, '没授权就不该说户数不够');
+
+    // 用户改过之后，键入不能被回填吞掉
+    app.el('useAuto').click ? app.fire('useAuto', 'click') : null;
+    app.el('rowFrom').value = '';
+    app.fire('rowFrom', 'input');
+    check.equal(app.el('rowFrom').value, '', '清空后不被回填');
+    app.el('rowFrom').value = '12';
+    app.fire('rowFrom', 'input');
+    check.equal(app.el('rowFrom').value, '12', '键入 12 不被吞成 2');
+
     // 「用自动判断」清掉人工范围
     app.fire('useAuto', 'click');
     check.equal(String(app.el('rowFrom').value), '3', '用自动判断后框里回到自动值');

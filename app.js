@@ -321,46 +321,66 @@
     // 框里的数字是程序回填的建议值时，仍按自动判断走。
     var manualFrom = Number($('rowFrom').value || 0);
     var manualTo = Number($('rowTo').value || 0);
-    var useManual = state.rangeDirty && manualFrom > 0 && manualTo > 0;
+    var useManual = false;
     state.manualRange = null;
-    if (useManual) {
-      if (manualFrom !== Math.floor(manualFrom) || manualTo !== Math.floor(manualTo)) {
-        state.problems.push('行号要填整数（现在是 ' + manualFrom + '–' + manualTo + '），已按自动判断处理。');
-        useManual = false;
+    if (state.rangeDirty) {
+      // 校验不过就只提示、**不动用户填的数字**：改回去会让「没授权却被当授权」
+      if (!(manualFrom >= 1) || !(manualTo >= 1)) {
+        state.problems.push('填写范围还没填完整（起止行都要有数），这一轮先按自动判断走。');
+      } else if (manualFrom !== Math.floor(manualFrom) || manualTo !== Math.floor(manualTo)) {
+        state.problems.push('行号要填整数（现在是 ' + manualFrom + '–' + manualTo + '），这一轮先按自动判断走。');
       } else if (manualTo < manualFrom) {
-        state.problems.push('范围填反了（第 ' + manualFrom + ' 行 > 第 ' + manualTo + ' 行），已按自动判断处理。');
-        useManual = false;
+        state.problems.push('范围填反了（第 ' + manualFrom + ' 行 > 第 ' + manualTo + ' 行），这一轮先按自动判断走。');
       } else if (manualFrom <= state.detail.headerRow + 1) {
         state.problems.push('第 ' + manualFrom + ' 行还在表头里（表头在第 ' + (state.detail.headerRow + 1) +
-          ' 行），已按自动判断处理。');
-        useManual = false;
+          ' 行），这一轮先按自动判断走。');
+      } else {
+        useManual = true;
       }
     }
     if (useManual) {
       state.manualRange = { from: manualFrom - 1, to: manualTo - 1 };
+      var beforeAuto = state.blanks;
       state.blanks = Core.rowsInRange(state.rows, state.detail, isF, manualFrom - 1, manualTo - 1, {
         isOccupied: function (r, c) { return cellHasValue(ws, r, c) || inArray(ranges, r, c); },
         isMergedSubordinate: function (r, c) { return isMergedSubordinate(merges, r, c); },
         isHidden: function (r) { var info = (ws['!rows'] || [])[r]; return !!(info && info.hidden); }
       });
+      if (!state.blanks.length) {
+        var why = '';
+        var hitRow = -1;
+        for (var q = manualFrom - 1; q < manualTo && q < state.rows.length; q++) {
+          var qr = state.rows[q] || [];
+          if (Core.isRowBoundary(qr, state.detail, String(qr[state.detail.cols.name] || '').trim())) { hitRow = q; break; }
+        }
+        if (hitRow >= 0) {
+          why = '第 ' + (hitRow + 1) + ' 行是合计/小计行，扫到那就停了。';
+        }
+        state.problems.push('你指定的范围（第 ' + manualFrom + '–' + manualTo + ' 行）里没有能填的空行：' +
+          (why || '要么已经填了客户，要么是公式格/合并格/隐藏行。') + '换个范围试试。');
+      } else if (state.blanks[0] > manualFrom - 1) {
+        state.problems.push('第 ' + manualFrom + '–' + state.blanks[0] + ' 行不能填（合计/小计/已填/公式/合并），' +
+          '实际从第 ' + (state.blanks[0] + 1) + ' 行开始。');
+      }
       // 手填的范围如果跑到合计公式之外，钱写进去合计不算——要说清楚，但照填
-      if (inTotalRange) {
+      if (inTotalRange && state.blanks.length) {
         var outside = state.blanks.filter(function (r) { return !inTotalRange(r); });
         if (outside.length) {
           state.problems.push('注意：你指定的范围里，第 ' + (outside[0] + 1) + '–' +
             (outside[outside.length - 1] + 1) + ' 行（共 ' + outside.length +
             ' 行）不在任何合计公式范围内。填进去合计不会算上这几行，请自己确认这样对不对。');
         }
-      } else if (!state.blanks.length) {
-        state.problems.push('你指定的范围（第 ' + manualFrom + '–' + manualTo + ' 行）里没有能填的空行：' +
-          '要么已经填了客户，要么是公式格/合计行/合并格。换个范围试试。');
       }
-    } else if ($('rowFrom') && $('rowTo')) {
-      // 自动判断：把结果回填到框里当建议
+      // 手填时提一句「自动判断本来会给哪几行」，方便对照
+      if (beforeAuto && beforeAuto.length) {
+        state.problems.push('（自动判断会给第 ' + beforeAuto.map(function (r) { return r + 1; }).join('、') + ' 行）');
+      }
+    } else if (!state.rangeDirty && $('rowFrom') && $('rowTo')) {
+      // 自动判断：把结果回填到框里当建议。用户改过就不覆盖，免得打字被吞
       $('rowFrom').value = state.blanks.length ? state.blanks[0] + 1 : '';
       $('rowTo').value = state.blanks.length ? state.blanks[state.blanks.length - 1] + 1 : '';
     }
-    if (group && group.title && group.title !== '（未分组）') {
+    if (!useManual && group && group.title && group.title !== '（未分组）') {
       state.problems.push('往「' + group.title + '」这一组填（第 ' + (group.startRow + 1) + '–' + group.endRow +
         ' 行），一组填完不会串到下一组。要填别的组请在上面切换。');
     }
@@ -601,6 +621,10 @@
         if (!res.ok) { state.error = '底稿读不了：' + res.error; renderAll(); return; }
         state.tplWb = res.wb;
         state.tplName = res.fileName;
+        // 换了一份底稿 → 上一份的行号一律作废，否则会套到新表上
+        state.rangeDirty = false;
+        if ($('rowFrom')) $('rowFrom').value = '';
+        if ($('rowTo')) $('rowTo').value = '';
         // 宏底稿重写会丢 VBA，只能走填充宏
         state.isMacroTemplate = /\.xlsm$/i.test(f.name || res.fileName || '');
         var problems = [];

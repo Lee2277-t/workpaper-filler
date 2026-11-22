@@ -15,7 +15,7 @@
 })(typeof self !== 'undefined' ? self : this, function () {
   'use strict';
 
-  var VERSION = '0.4.1';
+  var VERSION = '0.4.2';
 
   /* ---------------- 基础 ---------------- */
 
@@ -371,11 +371,21 @@
     var areaEnd = grandRow >= 0 ? grandRow : rows.length;
     // 没有分组标题：整块当一组（表头下方到合计行之前）
     if (!marks.length) {
+      var headUncovered = [];
       return [{
         title: '（未分组）',
         startRow: start,
         endRow: areaEnd,
-        blanks: findBlankRows(rows, detail, isFormula, opts)
+        uncovered: headUncovered,
+        blanks: findBlankRows(rows, detail, isFormula, {
+          uncovered: headUncovered,
+          startRow: start,
+          endRow: areaEnd,
+          isOccupied: opts.isOccupied,
+          isMergedSubordinate: opts.isMergedSubordinate,
+          isHidden: opts.isHidden,
+          inTotalRange: opts.inTotalRange
+        })
       }];
     }
     var out = [];
@@ -465,8 +475,10 @@
     // 但用户手填了范围时不许越界插行——那会写到他没指定的地方。
     var missing = Math.max(0, parties.length - blanks.length);
     if (opts.noInsert && missing > 0) {
+      var dropped = parties.slice(blanks.length).map(function (x) { return x.party; });
       problems.push('你指定的范围里只有 ' + blanks.length + ' 个能填的空行，客户有 ' +
-        parties.length + ' 户，多出来的 ' + missing + ' 户没有填。把范围改大一些再来一次。');
+        parties.length + ' 户，多出来的 ' + missing + ' 户没有填：' +
+        dropped.slice(0, 5).join('、') + (dropped.length > 5 ? ' 等' : '') + '。把范围改大一些再来一次。');
       parties = parties.slice(0, blanks.length);
       missing = 0;
     }
@@ -784,6 +796,7 @@
     summarizeByParty: summarizeByParty,
     detectDetail: detectDetail,
     findBlankRows: findBlankRows,
+    isRowBoundary: isRowBoundary,
     rowsInRange: rowsInRange,
     listGroups: listGroups,
     planWrites: planWrites,
