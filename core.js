@@ -461,6 +461,15 @@
     lines.push("' 底稿填充助手 生成");
     lines.push("' 用法：Excel 里 Alt+F11 → 插入 → 模块 → 粘贴本段 → F5");
     lines.push(willInsert ? "' 填写计划格，扩展合计公式前先询问" : "' 只写下面这些格，公式和其他内容一律不动");
+    lines.push("' ===== 开关 =====");
+    lines.push("' 不想看到弹窗就把它改成 True：照样填数，只是不提示");
+    lines.push('Private Const QUIET As Boolean = False');
+    lines.push('');
+    lines.push("' 所有提示都走这里，方便你一处关掉");
+    lines.push('Private Sub Say(msg As String, Optional icon As Long = 64)');
+    lines.push('    If Not QUIET Then MsgBox msg, icon, "底稿填充助手"');
+    lines.push('End Sub');
+    lines.push('');
     lines.push('Sub 填充底稿明细()');
     lines.push('    Dim ws As Worksheet');
     lines.push('    On Error GoTo Fail');
@@ -469,12 +478,12 @@
     lines.push('    Set ws = ThisWorkbook.Worksheets("' + String(sheetName).replace(/"/g, '""') + '")');
     lines.push('    On Error GoTo Fail');
     lines.push('    If ws Is Nothing Then');
-    lines.push('        MsgBox "找不到工作表「' + String(sheetName).replace(/"/g, '""') + '」。' +
+    lines.push('        Say "找不到工作表「' + String(sheetName).replace(/"/g, '""') + '」。' +
       '可能改了表名，或者宏跑在另一个工作簿上（要在底稿那个工作簿里跑）。", vbExclamation');
     lines.push('        Exit Sub');
     lines.push('    End If');
     lines.push('    If ws.ProtectContents Then');
-    lines.push('        MsgBox "工作表「' + String(sheetName).replace(/"/g, '""') + '」有保护，写不进去。" & vbCrLf & _');
+    lines.push('        Say "工作表「' + String(sheetName).replace(/"/g, '""') + '」有保护，写不进去。" & vbCrLf & _');
     lines.push('            "请先在「审阅」→「撤销工作表保护」里解开，再跑一次。", vbExclamation');
     lines.push('        Exit Sub');
     lines.push('    End If');
@@ -532,30 +541,32 @@
       lines.push('    Else');
       lines.push('        result = result & "未发现可扩展的单列 SUM，未手动改写合计公式。"');
       lines.push('    End If');
-      lines.push('    MsgBox result & vbCrLf & "请核对其他合计公式是否包含新增行。"');
+      lines.push('    Say result & vbCrLf & "请核对其他合计公式是否包含新增行。"');
     } else {
-      lines.push('    MsgBox "已填入 ' + plan.length + ' 户。公式未改动。"');
+      lines.push('    Say "已填入 ' + plan.length + ' 户。公式未改动。"');
     }
     lines.push('    Exit Sub');
     lines.push('FormulaFound:');
-    lines.push('    MsgBox "目标格包含公式，已停止，没有写入任何单元格。"');
+    lines.push('    Say "目标格包含公式，已停止，没有写入任何单元格。"');
     lines.push('    Exit Sub');
     lines.push('MergeFound:');
-    lines.push('    MsgBox "目标格是合并单元格的一部分，写进去会被 Excel 丢掉，已停止。"');
+    lines.push('    Say "目标格是合并单元格的一部分，写进去会被 Excel 丢掉，已停止。"');
     lines.push('    Exit Sub');
     // 任何没预料到的错误（多半是 1004）都给一句人话，不要弹「应用程序定义或对象定义错误」
-    lines.push('InsertFail:');
-    lines.push('    On Error Resume Next');
-    lines.push('    Application.CutCopyMode = False');
-    lines.push('    Application.ScreenUpdating = True');
-    lines.push('    MsgBox "插第 ' + (insertAfter + 2) + ' 行时失败了，没有写入任何单元格。" & vbCrLf & vbCrLf & _');
-    lines.push('        "最常见的原因是这一行的合并单元格跨到了下面一行——" & vbCrLf & _');
-    lines.push('        "先手工在明细区插入 ' + missing + ' 行，再跑一次这个宏（行数够了就不会再插）。", vbCritical');
-    lines.push('    Exit Sub');
+    if (willInsert) {
+      lines.push('InsertFail:');
+      lines.push('    On Error Resume Next');
+      lines.push('    Application.CutCopyMode = False');
+      lines.push('    Application.ScreenUpdating = True');
+      lines.push('    Say "插第 ' + (insertAfter + 2) + ' 行时失败了，没有写入任何单元格。" & vbCrLf & vbCrLf & _');
+      lines.push('        "最常见的原因是这一行的合并单元格跨到了下面一行——" & vbCrLf & _');
+      lines.push('        "先手工在明细区插入 ' + missing + ' 行，再跑一次这个宏（行数够了就不会再插）。", vbCritical');
+      lines.push('    Exit Sub');
+    }
     lines.push('Fail:');
     lines.push('    Application.ScreenUpdating = True');
     lines.push('    Application.CutCopyMode = False');
-    lines.push('    MsgBox "宏跑到一半出错了：" & Err.Number & " " & Err.Description & vbCrLf & vbCrLf & _');
+    lines.push('    Say "宏跑到一半出错了：" & Err.Number & " " & Err.Description & vbCrLf & vbCrLf & _');
     lines.push('        "常见原因：" & vbCrLf & _');
     lines.push('        "· 工作表被保护——先撤销保护" & vbCrLf & _');
     lines.push('        "· 宏跑在了别的工作簿上——要在底稿那个工作簿里跑" & vbCrLf & _');
@@ -593,6 +604,7 @@
         '    Next cell',
         '    If changes.Count = 0 Then Exit Function',
         '    If changes.Count > 3 Then examples = examples & vbCrLf & "其余 " & (changes.Count - 3) & " 个合计公式同样扩至新增行末尾。"',
+        '    If QUIET Then Exit Function',
         '    ConfirmTotalExpansion = (MsgBox(changes.Count & " 个合计公式将漏掉新增的 " & insertedRows & " 行。" & examples & vbCrLf & _',
         '        "是否扩展这些合计范围？选否将照常插行并填数，保留这些公式的原范围。", vbYesNo + vbDefaultButton2 + vbExclamation, "合计范围确认") = vbYes)',
         'End Function');

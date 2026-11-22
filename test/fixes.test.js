@@ -220,6 +220,7 @@ runSuite('缺陷回归', {
       return match ? [match[1]] : [];
     });
     check.deepEqual(guards, ['B3', 'C3', 'D3', 'E3', 'F3']);
-    check.match(lines.join('\n'), /Exit Sub\nFormulaFound:\n    MsgBox ".*公式.*没有写入/);
+    check.match(lines.join('\n'), /Exit Sub\nFormulaFound:\n    Say ".*公式.*没有写入/);
+    check.match(lines.join('\n'), /Private Const QUIET As Boolean = False/);
   }
 });
