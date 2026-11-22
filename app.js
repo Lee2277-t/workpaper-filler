@@ -208,7 +208,15 @@
       state.problems.push('往「' + group.title + '」这一组填（第 ' + (group.startRow + 1) + '–' + group.endRow +
         ' 行），一组填完不会串到下一组。要填别的组请在上面切换。');
     }
+    var opening = Core.parseOpening($('openBox') ? $('openBox').value : '');
+    state.opening = opening.map;
+    if (opening.bad.length) {
+      state.problems.push('期初里有 ' + opening.bad.length + ' 行读不出（第 ' +
+        opening.bad.map(function (b) { return b.line; }).join('、') +
+        ' 行），应该是「客户名 + 金额」两列。');
+    }
     var res = Core.planWrites(parties, state.blanks, state.detail, {
+      openCents: Object.keys(opening.map).length ? opening.map : null,
       canWrite: function (r, c) { return !isF(r, c); },
       isMergedSubordinate: function (r, c) { return isMergedSubordinate(merges, r, c); }
     });
@@ -428,6 +436,7 @@
 
     $('groupSel').addEventListener('change', function () { if (state.tplWb) recompute(); });
     $('subject').addEventListener('input', function () { if (state.tplWb) recompute(); });
+    if ($('openBox')) $('openBox').addEventListener('input', function () { if (state.tplWb) recompute(); });
     $('genVba').addEventListener('click', exportVba);
     $('genCsv').addEventListener('click', exportCsv);
     $('genXlsx').addEventListener('click', exportXlsx);

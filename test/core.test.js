@@ -130,6 +130,20 @@ ok(tooMany.problems.join('').indexOf('补 1 行') >= 0, '说明要补几行');
 
 /* ---------------- 宏 ---------------- */
 
+console.log('\n[期初]');
+{
+  const o = Core.parseOpening('客户\t期初\n华远\t1,000.00\n东方\t500\n坏行');
+  eq(Object.keys(o.map).length, 2, '两户期初');
+  eq(o.map['华远'], 100000, '华远期初 1000 元');
+  eq(o.bad.length, 1, '一行读不出');
+  const withOpen = Core.planWrites(parties, [5, 6], d, { openCents: o.map });
+  eq(cell(withOpen.plan[0], 4).value, 1000, '期初写进第 4 列');
+  eq(withOpen.plan[0].close, 170000, '期末 = 1000 + 1000 - 300');
+  ok(withOpen.problems.length === 0, '都给了期初就不提示');
+  const partial = Core.planWrites(parties.concat([{ party: '南方', debit: 100, credit: 0 }]), [5, 6, 7], d, { openCents: o.map });
+  ok(partial.problems.join('').indexOf('没给数') >= 0, '缺期初的户会提示');
+}
+
 console.log('\n[生成宏]');
 const vba = Core.buildVBA(res.plan, '预收款项明细表', { backup: false });
 ok(vba.indexOf('Sub 填充底稿明细()') >= 0, '有 Sub 入口');

@@ -360,11 +360,35 @@
    * detail: detectDetail 的结果
    * opts.openCents: 期初（客户级拿不到时统一给 0，让公式算）
    */
+  /**
+   * 解析用户粘进来的期初（从 Excel 复制两列：客户名 + 期初金额）。
+   * 制表符、逗号、多个空格都认；表头行自动跳过。
+   */
+  function parseOpening(text) {
+    var map = Object.create(null);
+    var bad = [];
+    var lines = str(text).split(/\r?\n/);
+    for (var i = 0; i < lines.length; i++) {
+      var line = lines[i];
+      if (!line.trim()) continue;
+      var parts = line.indexOf('\t') >= 0 ? line.split('\t') : line.split(/[,，]/);
+      if (parts.length < 2) { bad.push({ line: i + 1, text: line }); continue; }
+      var name = str(parts[0]).trim();
+      var amount = toCents(parts[1]);
+      if (!name) continue;
+      // 表头行
+      if (i === 0 && /客户|名称|单位|期初/.test(name) && amount === null) continue;
+      if (amount === null) { bad.push({ line: i + 1, text: line }); continue; }
+      map[cleanParty(name)] = amount;
+    }
+    return { map: map, bad: bad };
+  }
+
   function planWrites(parties, blanks, detail, opts) {
     opts = opts || {};
     var canWrite = opts.canWrite || function () { return true; };
     var isMergedSub = opts.isMergedSubordinate || function () { return false; };
-    var plan = [], problems = [];
+    var plan = [], problems = [], missingOpen = [];
     // 空行不够不再拒绝：Excel 本来就该插行，插进去公式会跟着往下走。
     // 这里算出缺几行、从哪一行续，宏里负责插。
     var missing = Math.max(0, parties.length - blanks.length);
@@ -375,6 +399,7 @@
     for (var i = 0; i < parties.length; i++) {
       var p = parties[i], row = rows[i];
       var open = opts.openCents ? (opts.openCents[p.party] || 0) : 0;
+      if (opts.openCents && !(p.party in opts.openCents)) missingOpen.push(p.party);
       var close = open + p.debit - p.credit;
       var cells = [];
       // 逐格判断：公式格不写，让它自己算。
@@ -391,6 +416,11 @@
       add(detail.cols.credit, p.credit / 100);
       add(detail.cols.close, close / 100);
       plan.push({ row: row, party: p.party, cells: cells, debit: p.debit, credit: p.credit, close: close, inserted: row > lastBlank });
+    }
+
+    if (missingOpen.length) {
+      problems.push('有 ' + missingOpen.length + ' 户在期初里没给数（' + missingOpen.slice(0, 3).join('、') +
+        (missingOpen.length > 3 ? ' 等' : '') + '），这些户的期初按 0 填，期末会偏小。');
     }
 
     if (missing > 0) {
@@ -567,6 +597,7 @@
     findBlankRows: findBlankRows,
     listGroups: listGroups,
     planWrites: planWrites,
+    parseOpening: parseOpening,
     buildVBA: buildVBA,
     buildCsv: buildCsv,
     colLetter: colLetter,

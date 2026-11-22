@@ -35,6 +35,17 @@
       <label>科目 <input type="text" id="subject" placeholder="1221 或 其他应收款" size="18"></label>
       <span class="hint">只按这个科目汇总，不会全表乱填</span>
     </div>
+    <div class="row" style="align-items:flex-start;margin-top:12px">
+      <label style="flex-direction:column;align-items:flex-start">
+        期初金额（可选）
+        <textarea id="openBox" rows="4" cols="46"
+          placeholder="从 Excel 复制两列粘进来：客户名 + 期初金额&#10;华远建设	1,000.00&#10;东方贸易	500.00"></textarea>
+      </label>
+      <span class="hint" style="max-width:280px">
+        明细表的「期末金额」多半是 <code>=期初+借−贷</code> 的公式。<br>
+        不填的话期初按 0 算，客户有年初余额时期末会偏小。
+      </span>
+    </div>
   </section>
 
   <section class="card">
