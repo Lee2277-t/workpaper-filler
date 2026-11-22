@@ -10,6 +10,59 @@ const data = journal([
 ]);
 
 runSuite('界面冒烟', {
+
+  async '手填填写范围：只填指定的行，改科目就作废'(check) {
+    const rows = detailRows(6);
+    const app = createApp();
+    await app.loadTemplate(workbook({ 明细: rows }));
+    await app.loadData(journal([
+      ['2026-01-05', '1221', '其他应收款', '甲', 100, 0],
+      ['2026-01-06', '1221', '其他应收款', '乙', 200, 0]
+    ]));
+    app.setSubject('1221');
+
+    // 没碰输入框：按自动判断
+    const autoFrom = app.el('rowFrom').value;
+    const autoTo = app.el('rowTo').value;
+    check.equal(autoFrom !== '', true, '自动建议回填到框里');
+    const planRows = () => [...app.el('planBody').innerHTML.matchAll(/<tr><td>\d+<\/td><td>(\d+)<\/td>/g)]
+      .map(m => Number(m[1]));
+
+    // 手填 5-6：只写这两行
+    app.el('rowFrom').value = '5';
+    app.el('rowTo').value = '6';
+    app.fire('rowFrom', 'input');
+    check.deepEqual(planRows(), [5, 6], '手填范围严格生效');
+
+    // 换科目：手填作废，回到自动判断
+    app.fire('subject', 'input');
+    check.deepEqual(planRows(), [3, 4], '换科目后回到自动判断');
+
+    // 范围填反：拒绝并回退
+    app.el('rowFrom').value = '9';
+    app.el('rowTo').value = '7';
+    app.fire('rowFrom', 'input');
+    const info = app.el('infoBox').innerHTML;
+    check.match(info, /范围填反了/, '填反要提示');
+    check.deepEqual(planRows(), [3, 4], '填反不写入');
+
+    // 小数行号：拒绝并回退
+    app.el('rowFrom').value = '3.5';
+    app.fire('rowFrom', 'input');
+    check.match(app.el('infoBox').innerHTML, /行号要填整数/, '小数要提示');
+
+    // 范围比户数小：不插行、不越界
+    app.el('rowFrom').value = '5';
+    app.el('rowTo').value = '5';
+    app.fire('rowFrom', 'input');
+    check.deepEqual(planRows(), [5], '范围只给一行就只填一行');
+    check.match(app.el('infoBox').innerHTML, /多出来的 1 户没有填/, '超出范围要说清楚');
+
+    // 「用自动判断」清掉人工范围
+    app.fire('useAuto', 'click');
+    check.equal(String(app.el('rowFrom').value), '3', '用自动判断后框里回到自动值');
+  },
+
   async '选择工作表、核对汇总和明细行，再下载宏'(check) {
     const app = createApp();
     for (const id of exportButtons) check.equal(app.el(id).disabled, true, id + ' 初始禁用');

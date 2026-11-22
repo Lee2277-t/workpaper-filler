@@ -317,23 +317,48 @@
     state.blanks = (group ? group.blanks : []).filter(function (r) {
       return !rowOccupied(ws, ranges, r, state.detail);
     });
-    // 用户手动指定了行范围就严格按他给的来（自动判断只作为默认值）
+    // 只有用户**真的改过**行号，才走手填范围这条路。
+    // 框里的数字是程序回填的建议值时，仍按自动判断走。
     var manualFrom = Number($('rowFrom').value || 0);
     var manualTo = Number($('rowTo').value || 0);
-    if (manualFrom > 0 && manualTo >= manualFrom) {
+    var useManual = state.rangeDirty && manualFrom > 0 && manualTo > 0;
+    state.manualRange = null;
+    if (useManual) {
+      if (manualFrom !== Math.floor(manualFrom) || manualTo !== Math.floor(manualTo)) {
+        state.problems.push('行号要填整数（现在是 ' + manualFrom + '–' + manualTo + '），已按自动判断处理。');
+        useManual = false;
+      } else if (manualTo < manualFrom) {
+        state.problems.push('范围填反了（第 ' + manualFrom + ' 行 > 第 ' + manualTo + ' 行），已按自动判断处理。');
+        useManual = false;
+      } else if (manualFrom <= state.detail.headerRow + 1) {
+        state.problems.push('第 ' + manualFrom + ' 行还在表头里（表头在第 ' + (state.detail.headerRow + 1) +
+          ' 行），已按自动判断处理。');
+        useManual = false;
+      }
+    }
+    if (useManual) {
       state.manualRange = { from: manualFrom - 1, to: manualTo - 1 };
       state.blanks = Core.rowsInRange(state.rows, state.detail, isF, manualFrom - 1, manualTo - 1, {
         isOccupied: function (r, c) { return cellHasValue(ws, r, c) || inArray(ranges, r, c); },
         isMergedSubordinate: function (r, c) { return isMergedSubordinate(merges, r, c); },
         isHidden: function (r) { var info = (ws['!rows'] || [])[r]; return !!(info && info.hidden); }
       });
-    } else {
-      state.manualRange = null;
-      // 用户没改过行号时，把自动判断的结果填进输入框当作建议
-      if (!state.rangeDirty && $('rowFrom') && $('rowTo')) {
-        $('rowFrom').value = state.blanks.length ? state.blanks[0] + 1 : '';
-        $('rowTo').value = state.blanks.length ? state.blanks[state.blanks.length - 1] + 1 : '';
+      // 手填的范围如果跑到合计公式之外，钱写进去合计不算——要说清楚，但照填
+      if (inTotalRange) {
+        var outside = state.blanks.filter(function (r) { return !inTotalRange(r); });
+        if (outside.length) {
+          state.problems.push('注意：你指定的范围里，第 ' + (outside[0] + 1) + '–' +
+            (outside[outside.length - 1] + 1) + ' 行（共 ' + outside.length +
+            ' 行）不在任何合计公式范围内。填进去合计不会算上这几行，请自己确认这样对不对。');
+        }
+      } else if (!state.blanks.length) {
+        state.problems.push('你指定的范围（第 ' + manualFrom + '–' + manualTo + ' 行）里没有能填的空行：' +
+          '要么已经填了客户，要么是公式格/合计行/合并格。换个范围试试。');
       }
+    } else if ($('rowFrom') && $('rowTo')) {
+      // 自动判断：把结果回填到框里当建议
+      $('rowFrom').value = state.blanks.length ? state.blanks[0] + 1 : '';
+      $('rowTo').value = state.blanks.length ? state.blanks[state.blanks.length - 1] + 1 : '';
     }
     if (group && group.title && group.title !== '（未分组）') {
       state.problems.push('往「' + group.title + '」这一组填（第 ' + (group.startRow + 1) + '–' + group.endRow +
@@ -357,6 +382,7 @@
     state.closeSign = signInfo.sign;
     state.closeSignFrom = signInfo.from;
     var res = Core.planWrites(parties, state.blanks, state.detail, {
+      noInsert: !!state.manualRange,
       closeSign: signInfo.sign,
       openCents: Object.keys(opening.map).length ? opening.map : null,
       canWrite: function (r, c) { return !isF(r, c); },
@@ -621,6 +647,7 @@
       var list = listDetailSheets(state.tplWb);
       var hit = list.filter(function (s) { return s.name === $('sheetSel').value; })[0];
       state.sheetName = hit ? hit.name : '';
+      state.rangeDirty = false;                 // 换表 → 人工范围作废
       state.detail = hit ? hit.det : null;
       state.rows = hit ? hit.rows : null;
       recompute();
@@ -641,10 +668,15 @@
     if ($('useAuto')) {
       $('useAuto').addEventListener('click', function () {
         state.rangeDirty = false;
+        if ($('rowFrom')) $('rowFrom').value = '';
+        if ($('rowTo')) $('rowTo').value = '';
         if (state.tplWb) recompute();
       });
     }
-    $('subject').addEventListener('input', function () { if (state.tplWb) recompute(); });
+    $('subject').addEventListener('input', function () {
+      state.rangeDirty = false;                 // 换科目 → 人工范围作废
+      if (state.tplWb) recompute();
+    });
     if ($('openBox')) $('openBox').addEventListener('input', function () { if (state.tplWb) recompute(); });
     $('genVba').addEventListener('click', exportVba);
     $('genCsv').addEventListener('click', exportCsv);

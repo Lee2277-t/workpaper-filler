@@ -15,7 +15,7 @@
 })(typeof self !== 'undefined' ? self : this, function () {
   'use strict';
 
-  var VERSION = '0.4.0';
+  var VERSION = '0.4.1';
 
   /* ---------------- 基础 ---------------- */
 
@@ -290,8 +290,9 @@
         if (v !== null && v !== undefined && String(v).trim() !== '') hasAmount = true;
       });
       // 明细区里冒出一行「只有文字、没有任何金额」的标题（账龄分析 / 说明 / 备注），
-      // 那是下一张表，到此为止——否则账龄区的空行会被当成明细空行
-      if (nameCell && !hasAmount && seenRow) break;
+      // 而且它自己不在任何合计范围内 → 那是下一张表，到此为止。
+      // 在合计范围内的说明行只是跳过，不截断（否则同一段里后面还有空行就填不到了）
+      if (nameCell && !hasAmount && seenRow && opts.inTotalRange && !opts.inTotalRange(r)) break;
       if ((opts.isHidden && opts.isHidden(r))) continue;   // 隐藏行不写，用户看不见
       if (/^[一二三四五六七八九十]+$/.test(nameCell)) continue;
       if (nameCell) { if (hasAmount) seenRow = true; continue; }   // 已经有内容，不覆盖
@@ -461,7 +462,14 @@
     }
     // 空行不够不再拒绝：Excel 本来就该插行，插进去公式会跟着往下走。
     // 这里算出缺几行、从哪一行续，宏里负责插。
+    // 但用户手填了范围时不许越界插行——那会写到他没指定的地方。
     var missing = Math.max(0, parties.length - blanks.length);
+    if (opts.noInsert && missing > 0) {
+      problems.push('你指定的范围里只有 ' + blanks.length + ' 个能填的空行，客户有 ' +
+        parties.length + ' 户，多出来的 ' + missing + ' 户没有填。把范围改大一些再来一次。');
+      parties = parties.slice(0, blanks.length);
+      missing = 0;
+    }
     var lastBlank = blanks.length ? blanks[blanks.length - 1] : -1;
     var rows = blanks.slice();
     for (var k = 0; k < missing; k++) rows.push(lastBlank + 1 + k);
