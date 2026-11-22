@@ -321,10 +321,20 @@
       // 总合计：明细区到此为止
       if (isGrandTotal(nameCell) && grandRow < 0) { grandRow = r; break; }
       if (isTotalLabel(nameCell)) continue;          // 组内小计：是边界，不是终点
-      var isGroup = nameCell.length <= 24 && !/合计|小计|总计/.test(nameCell) &&
-        (/^[一二三四五六七八九十]+[、.．]?/.test(nameCell) || /关联方|组合计提|按款项性质/.test(nameCell)) &&
-        !/[为是]$|占比|金额为/.test(nameCell);
-      if (isGroup) marks.push({ row: r, title: nameCell });
+      // 标题可能合并进 A 列（A:B / A:F），此时名称列是空从属格，要看整行
+      var titleText = nameCell;
+      if (!titleText) {
+        for (var tc = 0; tc < row.length; tc++) {
+          var tv = str(row[tc]).trim();
+          if (tv && /^[一二三四五六七八九十]+[、.．]?/.test(tv) || /关联方|组合计提|按款项性质/.test(tv)) {
+            if (tv && tv.length <= 24) { titleText = tv; break; }
+          }
+        }
+      }
+      var isGroup = titleText.length <= 24 && !/合计|小计|总计/.test(titleText) &&
+        (/^[一二三四五六七八九十]+[、.．]?/.test(titleText) || /关联方|组合计提|按款项性质/.test(titleText)) &&
+        !/[为是]$|占比|金额为/.test(titleText);
+      if (isGroup) marks.push({ row: r, title: titleText });
     }
     var areaEnd = grandRow >= 0 ? grandRow : rows.length;
     // 没有分组标题：整块当一组（表头下方到合计行之前）
@@ -404,7 +414,7 @@
     opts = opts || {};
     var canWrite = opts.canWrite || function () { return true; };
     var isMergedSub = opts.isMergedSubordinate || function () { return false; };
-    var plan = [], problems = [], missingOpen = [];
+    var plan = [], problems = [], missingOpen = [], mergedOut = [];
     // 空行数为 0 时无法判断从哪一行开始续，硬算会把客户写进标题行/表头
     if (!blanks.length) {
       problems.push('这一组没有可填的空行。请先在底稿里给这一组插入几行空行，再重新生成。');
@@ -433,6 +443,18 @@
         if (!canWrite(refRow, col)) return;
         cells.push({ col: col, value: value, text: !!text });
       };
+      // 整行检查：有任何一个要写的格被合并盖住 → 这一户整行不填，
+      // 否则会出现「期初没写进去、期末却按期初算了」的勾稽不平
+      var wanted = [detail.cols.name, detail.cols.open, detail.cols.debit, detail.cols.credit, detail.cols.close];
+      var blocked = null;
+      for (var w = 0; w < wanted.length; w++) {
+        var wc = wanted[w];
+        if (wc >= 0 && isMergedSub(row, wc)) { blocked = wc; break; }
+      }
+      if (blocked !== null) {
+        mergedOut.push({ party: p.party, row: row, col: blocked });
+        continue;
+      }
       add(detail.cols.name, p.party, true);
       add(detail.cols.open, open / 100);
       add(detail.cols.debit, p.debit / 100);
@@ -441,6 +463,11 @@
       plan.push({ row: row, party: p.party, cells: cells, debit: p.debit, credit: p.credit, close: close, inserted: row > lastBlank });
     }
 
+    if (mergedOut.length) {
+      problems.push('有 ' + mergedOut.length + ' 户在明细表里被合并单元格挡住了（' +
+        mergedOut.slice(0, 3).map(function (m) { return m.party + ' 第 ' + (m.row + 1) + ' 行'; }).join('、') +
+        (mergedOut.length > 3 ? ' 等' : '') + '），这些户没有填，请先取消合并再生成。');
+    }
     if (missingOpen.length) {
       problems.push('有 ' + missingOpen.length + ' 户在期初里没给数（' + missingOpen.slice(0, 3).join('、') +
         (missingOpen.length > 3 ? ' 等' : '') + '），这些户的期初按 0 填，期末会偏小。');
@@ -604,6 +631,7 @@
         '    Dim formulas As Range, cell As Range, sumRange As Range',
         '    Dim formula As String, refText As String, address As String, proposed As String, examples As String',
         '    Dim startRef As String, endRef As String, parts() As String',
+        '    Dim plainTotals As Long',
         '    On Error Resume Next',
         '    Set formulas = ws.UsedRange.SpecialCells(xlCellTypeFormulas)',
         '    On Error GoTo 0',
@@ -611,7 +639,11 @@
         '    For Each cell In formulas.Cells',
         '        If cell.Row <= lastDetailRow Or cell.HasArray Then GoTo NextFormula',
         '        formula = cell.Formula',
-        '        If Left$(UCase$(formula), 5) <> "=SUM(" Or Right$(formula, 1) <> ")" Then GoTo NextFormula',
+        '        If Right$(formula, 1) <> ")" Then GoTo NextFormula',
+        '        If Left$(UCase$(formula), 5) <> "=SUM(" Then',
+        '            If InStr(formula, "+") > 0 Then plainTotals = plainTotals + 1',
+        '            GoTo NextFormula',
+        '        End If',
         '        refText = Replace(Mid$(formula, 6, Len(formula) - 6), " ", "")',
         '        Set sumRange = Nothing',
         '        On Error Resume Next',
@@ -627,11 +659,13 @@
         '        startRef = parts(0)',
         '        endRef = parts(1)',
         '        proposed = "=SUM(" & startRef & ":" & _',
-        '            ws.Range(endRef).Offset(insertedRows, 0).Address(False, False) & ")"',
+        '            ws.Cells(lastDetailRow + insertedRows, sumRange.Column).Address(False, False) & ")"',
         '        changes.Add Array(cell.Row + insertedRows, cell.Column, proposed)',
         '        If changes.Count <= 3 Then examples = examples & vbCrLf & cell.Address(False, False) & "（插行前） " & formula & " → " & proposed',
         'NextFormula:',
         '    Next cell',
+        '    If plainTotals > 0 Then Say plainTotals & " 个合计是逐格相加写的（比如 =D3+D4），" & _',
+        '        "插行后不会自动包含新行，请手工核一下。", vbExclamation',
         '    If changes.Count = 0 Then Exit Function',
         '    If changes.Count > 3 Then examples = examples & vbCrLf & "其余 " & (changes.Count - 3) & " 个合计公式同样扩至新增行末尾。"',
         '    If QUIET Then Exit Function',

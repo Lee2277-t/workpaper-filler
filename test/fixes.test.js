@@ -41,10 +41,10 @@ runSuite('缺陷回归', {
       check.equal(out.F5?.f, 'SUM(F3:F4)');
     }
   },
-  async '2 合并标题行不写，仍逐格保护合并从属格'(check) {
-    const rows = detailRows(4);
+  async '2 合并标题行不写；金额列被合并盖住时整行不填并提示'(check) {
+    const rows = detailRows(6);
     rows[3] = ['一、合并范围内关联方'];
-    rows[6][1] = '本项目小计';
+    rows[8][1] = '本项目小计';
     const template = workbook({ 明细: rows });
     template.Sheets.明细['!merges'] = ['A4:F4', 'C5:D5'].map(XLSX.utils.decode_range);
     const app = await prepareDetail(template, journal([
@@ -52,14 +52,18 @@ runSuite('缺陷回归', {
       ['2026-01-06', '1221', '其他应收款', '合成乙', 200, 0],
       ['2026-01-07', '1221', '其他应收款', '合成丙', 300, 0]
     ]));
+    // 第 5 行的期初和借方被合并成一格：写进去会丢，期末却按期初算 → 整行不填
+    check.match(app.el('infoBox').innerHTML, /被合并单元格挡住/);
     const out = await exportDetail(app);
-    check.deepEqual([out.B3?.v, out.B4, out.B5?.v, out.B6?.v], ['合成甲', undefined, '合成乙', '合成丙']);
-    check.equal(out.A4?.v, '一、合并范围内关联方');
+    check.equal(out.B5?.v, undefined, '被合并盖住的行不写客户名');
+    check.equal(out.D5, undefined, '合并从属格不写');
+    check.equal(out.B6?.v, '合成乙', '下一户顺延到下一行');
+    check.equal(out.B7?.v, '合成丙', '再下一户继续');
+    check.equal(out.A4?.v, '一、合并范围内关联方', '合并标题行原样保留');
     check.deepEqual(out['!merges'].map(XLSX.utils.encode_range), ['A4:F4', 'C5:D5']);
-    check.equal(out.D5, undefined);
     const vba = await exportMacro(app);
-    check.doesNotMatch(vba, /ws\.Range\("(?:[B-F]4|D5)"\)\.Value =/);
-    check.match(vba, /If ws\.Range\("B5"\)\.MergeCells .*MergeArea\.Cells\(1\)\.Address Then GoTo MergeFound/);
+    check.doesNotMatch(vba, /ws\.Range\("(?:[B-F]4|B5|D5)"\)\.Value =/);
+    check.match(vba, /MergeCells .*MergeArea\.Cells\(1\)\.Address Then GoTo MergeFound/);
   },
   async '3 默认选明细分组，分组标题以前的空行排在最后'(check) {
     const rows = detailRows(8);
