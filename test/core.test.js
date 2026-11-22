@@ -1,0 +1,166 @@
+/**
+ * 底稿填充助手 · 核心逻辑回归
+ */
+const path = require('path');
+const Core = require(path.join(__dirname, '..', 'core.js'));
+
+let pass = 0, fail = [];
+function ok(cond, msg) { if (cond) pass++; else fail.push(msg); }
+function eq(a, b, msg) {
+  ok(a === b, msg + ' — 期望 ' + JSON.stringify(b) + '，实际 ' + JSON.stringify(a));
+}
+
+/* ---------------- 金额 ---------------- */
+
+console.log('[金额]');
+eq(Core.toCents('1,234.56'), 123456, '千分位');
+eq(Core.toCents('-500'), -50000, '负数');
+eq(Core.toCents('待核实'), null, '文字读不出');
+eq(Core.moneyText(123456), '1,234.56', '显示');
+
+/* ---------------- 认序时账 ---------------- */
+
+console.log('\n[认序时账]');
+const journal = [
+  ['记账凭证'],
+  ['2026年满足条件查询的全部'],
+  ['日期', '字', '号', '摘要', '科目代码', '科目名称', '借方金额', '贷方金额', '客户档案代码', '客户档案名称'],
+  ['2026-01-05', '记', '1', '收货款', '1221.01', '其他应收款', 1000, 0, 'KH001', '华远'],
+  ['2026-01-06', '记', '2', '付款', '1221.01', '其他应收款', 0, 300, 'KH001', '华远'],
+  ['2026-01-07', '记', '3', '借款', '1221.02', '其他应收款', 500, 0, 'KH002', '东方'],
+  ['2026-01-08', '记', '4', '转账', '1002', '银行存款', 0, 200, '', '']
+];
+const jh = Core.detectJournal(journal);
+eq(jh.rowIndex, 2, '表头在第 3 行');
+eq(jh.cols.code, 4, '科目代码列');
+eq(jh.cols.debit, 6, '借方列');
+eq(jh.cols.credit, 7, '贷方列');
+eq(jh.cols.party, 9, '客户档案列');
+
+const jr = Core.readJournal(journal, jh);
+eq(jr.records.length, 4, '四条记录');
+eq(jr.records[0].debit, 100000, '借方金额');
+eq(jr.records[1].credit, 30000, '贷方金额');
+eq(jr.records[0].party, '华远', '客户名');
+
+/* ---------------- 按客户汇总 ---------------- */
+
+console.log('\n[按客户汇总]');
+eq(Core.cleanParty('客户档案－中国金谷'), '中国金谷', '去掉 ERP 的客户档案前缀');
+eq(Core.cleanParty('华远建设'), '华远建设', '没有前缀的不动');
+
+const p1 = Core.summarizeByParty(jr.records, '1221');
+eq(p1.length, 2, '科目 1221 有两户');
+eq(p1[0].party, '华远', '第一户');
+eq(p1[0].debit, 100000, '华远借方');
+eq(p1[0].credit, 30000, '华远贷方');
+eq(p1[0].balance, 70000, '华远净额');
+eq(p1[1].party, '东方', '第二户');
+
+const p2 = Core.summarizeByParty(jr.records, '1221.02');
+eq(p2.length, 1, '按明细科目筛只有一户');
+
+const p3 = Core.summarizeByParty(jr.records, '不存在的科目');
+eq(p3.length, 0, '筛不到就是空');
+
+const p4 = Core.summarizeByParty(jr.records, '其他应收款');
+eq(p4.length, 2, '按科目名也能筛');
+
+/* ---------------- 认明细表 ---------------- */
+
+console.log('\n[认明细表]');
+const detail = [
+  ['', '预收款项明细表'],
+  ['', '', '', '', '', '', '', ''],
+  ['', '序号', '项目名称', '款项性质', '本期未审'],
+  ['科目编号', '', '', '', '期初金额', '本期借方', '本期贷方', '期末金额'],
+  ['', '一', '合并范围内关联方', '——', '', '', '', ''],
+  ['', '', '', '', '', '', '', '']
+];
+const d = Core.detectDetail(detail);
+eq(d.usable, true, '能认出来');
+eq(d.headerRow, 3, '金额表头在第 4 行');
+eq(d.cols.no, 1, '序号列');
+eq(d.cols.name, 2, '项目名称列');
+eq(d.cols.open, 4, '期初列');
+eq(d.cols.debit, 5, '借方列');
+eq(d.cols.credit, 6, '贷方列');
+eq(d.cols.close, 7, '期末列');
+
+const notDetail = Core.detectDetail([['日期', '客户', '金额'], ['2025-01-01', '华远', 100]]);
+eq(notDetail.usable, false, '普通表不当明细表');
+
+/* ---------------- 找空行 ---------------- */
+
+console.log('\n[找空行]');
+const blankRows = Core.findBlankRows(detail, d, function (r, c) {
+  // 第 5 行（索引 4）的分组合计格是公式
+  return r === 4 && c >= 4;
+});
+eq(blankRows.length, 1, '只有最后一行是可填的空行');
+eq(blankRows[0], 5, '空行是第 6 行（0 基索引 5）');
+
+const filled = detail.slice();
+filled[5] = ['', '', '已有客户', '', 1, 2, 3, 4];
+eq(Core.findBlankRows(filled, d, function () { return false; }).length, 0, '已有内容的行不覆盖');
+
+/* ---------------- 生成计划 ---------------- */
+
+console.log('\n[生成计划]');
+const parties = [
+  { party: '华远', debit: 100000, credit: 30000, count: 2, balance: 70000 },
+  { party: '东方', debit: 50000, credit: 0, count: 1, balance: 50000 }
+];
+const blanks = [5, 6];
+const res = Core.planWrites(parties, blanks, d, {});
+eq(res.plan.length, 2, '两户两行');
+eq(res.plan[0].row, 5, '第一户写第 6 行');
+eq(res.plan[0].party, '华远', '客户名');
+const cell = (p, col) => p.cells.filter(c => c.col === col)[0];
+eq(cell(res.plan[0], 2).value, '华远', '名称写成文本');
+eq(cell(res.plan[0], 5).value, 1000, '借方 1000 元');
+eq(cell(res.plan[0], 6).value, 300, '贷方 300 元');
+eq(cell(res.plan[0], 7).value, 700, '期末 = 0 + 1000 - 300');
+
+const tooMany = Core.planWrites(parties, [5], d, {});
+eq(tooMany.plan.length, 0, '空行不够时不生成');
+ok(tooMany.problems.join('').indexOf('空行') >= 0, '说明空行不够');
+
+/* ---------------- 宏 ---------------- */
+
+console.log('\n[生成宏]');
+const vba = Core.buildVBA(res.plan, '预收款项明细表', { backup: false });
+ok(vba.indexOf('Sub 填充底稿明细()') >= 0, '有 Sub 入口');
+ok(vba.indexOf('Worksheets("预收款项明细表")') >= 0, '指向正确的工作表');
+ok(vba.indexOf('ws.Range("C6").Value = "华远"') >= 0, '名称写 C6');
+ok(vba.indexOf('ws.Range("F6").Value = 1000.00') >= 0, '借方写 F6');
+ok(vba.indexOf('ws.Range("H6").Value = 700.00') >= 0, '期末写 H6');
+ok(vba.indexOf('ws.Range("G6").Value = 300.00') >= 0, '贷方写 G6');
+ok(vba.indexOf('End Sub') >= 0, '有结束');
+ok(vba.indexOf('MsgBox') >= 0, '有完成提示');
+
+const vbaQuoted = Core.buildVBA([{ row: 0, party: 'x', cells: [{ col: 0, value: '带"引号"的名字', text: true }] }], 'A', { backup: false });
+ok(vbaQuoted.indexOf('""引号""') >= 0, 'VBA 里的引号要转义');
+
+eq(Core.colLetter(0), 'A', '第 0 列是 A');
+eq(Core.colLetter(25), 'Z', '第 25 列是 Z');
+eq(Core.colLetter(26), 'AA', '第 26 列是 AA');
+eq(Core.colLetter(27), 'AB', '第 27 列是 AB');
+
+/* ---------------- CSV ---------------- */
+
+console.log('\n[明细行 CSV]');
+const csv = Core.buildCsv(res.plan, d);
+const lines = csv.split('\r\n');
+eq(lines.length, 3, '表头 + 两行');
+ok(lines[0].indexOf('客户') >= 0, '有表头');
+ok(lines[1].indexOf('华远') >= 0, '有华远');
+ok(lines[1].indexOf('1000.00') >= 0, '有借方金额');
+
+console.log('\n============================================================');
+if (fail.length) {
+  console.log('失败 ' + fail.length + ' / ' + (pass + fail.length) + ' 项：');
+  fail.forEach((m, i) => console.log('  ' + (i + 1) + '. ' + m));
+  process.exit(1);
+}
+console.log('核心逻辑全部通过：' + pass + ' 项断言');

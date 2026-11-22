@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>底稿填充助手</title>
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<header>
+  <h1>底稿填充助手 <span class="ver">v0.1.0</span></h1>
+  <p class="sub">把序时账按客户汇总，填进带公式的底稿明细表——<b>公式一个都不动</b>。文件只在本机浏览器里读，不上传。</p>
+</header>
+
+<main>
+  <section class="card">
+    <h2>① 底稿模板</h2>
+    <div class="row">
+      <input type="file" id="tplFile" accept=".xlsx,.xlsm">
+    </div>
+    <p class="hint" id="tplInfo"></p>
+    <div class="row" id="sheetRow">
+      <label>填哪张明细表 <select id="sheetSel"></select></label>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>② 数据源（科目余额表、序时账）</h2>
+    <div class="row">
+      <input type="file" id="dataFile" accept=".xlsx,.xls,.csv">
+    </div>
+    <p class="hint" id="dataInfo"></p>
+    <div class="row">
+      <label>科目 <input type="text" id="subject" placeholder="1221 或 其他应收款" size="18"></label>
+      <span class="hint">只按这个科目汇总，不会全表乱填</span>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>③ 核对后生成</h2>
+    <div id="infoBox"></div>
+    <div id="statBox" class="stats"></div>
+    <div class="row" style="margin-top:14px">
+      <button id="genVba" type="button" disabled>下载填充宏（推荐）</button>
+      <button id="genCsv" class="ghost" type="button" disabled>下载明细行 CSV</button>
+      <button id="genXlsx" class="ghost" type="button" disabled>直接生成填好的 xlsx</button>
+    </div>
+    <p class="hint" id="genInfo"></p>
+    <p class="hint"><b>为什么推荐宏</b>：宏只写目标单元格，底稿的格式、合并、批注、图表全都不动；
+    直接生成 xlsx 会重写整个文件，格式可能变。</p>
+  </section>
+
+  <section class="card hidden" id="planPanel">
+    <h2>将写入的内容</h2>
+    <div class="tableWrap">
+      <table>
+        <thead>
+          <tr><th>#</th><th>底稿行</th><th>客户 / 项目名称</th><th>期初</th><th>本期借方</th><th>本期贷方</th><th>期末</th></tr>
+        </thead>
+        <tbody id="planBody"></tbody>
+      </table>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <p>只填空行和空格：明细表里已经有内容、或那一行带公式的位置，一律跳过。</p>
+</footer>
+
+<script src="vendor/xlsx.full.min.js"></script>
+<script src="core.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
