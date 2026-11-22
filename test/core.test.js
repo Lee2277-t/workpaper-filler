@@ -1,3 +1,4 @@
+const fs = require('fs');
 /**
  * 底稿填充助手 · 核心逻辑回归
  */
@@ -202,6 +203,14 @@ console.log('\n[未来行的合并判断]');
     [4], d2, { isMergedSubordinate: isMerged, canWrite: () => true });
   eq(res.plan.length, 2, '合并的合计行不该挡住要插进来的客户');
   eq(res.plan[1].row, 5, '第二户排在模板行之后，插行后落到它下面');
+}
+
+console.log('\n[版本号一致]');
+{
+  // 版本号漂过一次：core.js 改了、index.html 忘了改，界面上显示的就不是发出去的版本
+  const html = fs.readFileSync(__dirname + '/../index.html', 'utf8');
+  ok(/^\d+\.\d+\.\d+$/.test(Core.VERSION), 'core.js 版本号是 x.y.z');
+  ok(html.indexOf('v' + Core.VERSION) >= 0, 'index.html 里的版本号与 core.js 一致');
 }
 
 console.log('\n[生成宏]');

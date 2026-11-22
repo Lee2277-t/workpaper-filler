@@ -15,7 +15,7 @@
 })(typeof self !== 'undefined' ? self : this, function () {
   'use strict';
 
-  var VERSION = '0.3.0';
+  var VERSION = '0.3.1';
 
   /* ---------------- 基础 ---------------- */
 
