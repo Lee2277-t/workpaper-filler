@@ -317,6 +317,24 @@
     state.blanks = (group ? group.blanks : []).filter(function (r) {
       return !rowOccupied(ws, ranges, r, state.detail);
     });
+    // 用户手动指定了行范围就严格按他给的来（自动判断只作为默认值）
+    var manualFrom = Number($('rowFrom').value || 0);
+    var manualTo = Number($('rowTo').value || 0);
+    if (manualFrom > 0 && manualTo >= manualFrom) {
+      state.manualRange = { from: manualFrom - 1, to: manualTo - 1 };
+      state.blanks = Core.rowsInRange(state.rows, state.detail, isF, manualFrom - 1, manualTo - 1, {
+        isOccupied: function (r, c) { return cellHasValue(ws, r, c) || inArray(ranges, r, c); },
+        isMergedSubordinate: function (r, c) { return isMergedSubordinate(merges, r, c); },
+        isHidden: function (r) { var info = (ws['!rows'] || [])[r]; return !!(info && info.hidden); }
+      });
+    } else {
+      state.manualRange = null;
+      // 用户没改过行号时，把自动判断的结果填进输入框当作建议
+      if (!state.rangeDirty && $('rowFrom') && $('rowTo')) {
+        $('rowFrom').value = state.blanks.length ? state.blanks[0] + 1 : '';
+        $('rowTo').value = state.blanks.length ? state.blanks[state.blanks.length - 1] + 1 : '';
+      }
+    }
     if (group && group.title && group.title !== '（未分组）') {
       state.problems.push('往「' + group.title + '」这一组填（第 ' + (group.startRow + 1) + '–' + group.endRow +
         ' 行），一组填完不会串到下一组。要填别的组请在上面切换。');
@@ -608,7 +626,24 @@
       recompute();
     });
 
-    $('groupSel').addEventListener('change', function () { if (state.tplWb) recompute(); });
+    $('groupSel').addEventListener('change', function () {
+      state.rangeDirty = false;                     // 换组 → 重新用自动判断
+      if (state.tplWb) recompute();
+    });
+    // 手改行号 → 严格按用户给的范围填，机器不再自己划
+    ['rowFrom', 'rowTo'].forEach(function (id) {
+      if (!$(id)) return;
+      $(id).addEventListener('input', function () {
+        state.rangeDirty = true;
+        if (state.tplWb) recompute();
+      });
+    });
+    if ($('useAuto')) {
+      $('useAuto').addEventListener('click', function () {
+        state.rangeDirty = false;
+        if (state.tplWb) recompute();
+      });
+    }
     $('subject').addEventListener('input', function () { if (state.tplWb) recompute(); });
     if ($('openBox')) $('openBox').addEventListener('input', function () { if (state.tplWb) recompute(); });
     $('genVba').addEventListener('click', exportVba);

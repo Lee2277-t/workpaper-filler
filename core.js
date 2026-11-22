@@ -15,7 +15,7 @@
 })(typeof self !== 'undefined' ? self : this, function () {
   'use strict';
 
-  var VERSION = '0.3.7';
+  var VERSION = '0.4.0';
 
   /* ---------------- 基础 ---------------- */
 
@@ -276,21 +276,25 @@
     var endRow = opts.endRow === undefined ? rows.length : opts.endRow;
     var isOccupied = opts.isOccupied || function () { return false; };
     var isMerged = opts.isMergedSubordinate || function () { return false; };
+    var seenRow = false;   // 已经进过明细行（空行或有金额的行）
     for (var r = start; r < endRow; r++) {
       var row = rows[r] || [];
       var nameCell = str(row[detail.cols.name]).trim();
       // 合计/小计行：这段明细到此结束。
       // 「小计在上、明细在下」的块标题由 listGroups 当成独立分组，扫不到这里。
       if (isRowBoundary(row, detail, nameCell)) break;
+      var hasAmount = false;
+      [detail.cols.open, detail.cols.debit, detail.cols.credit, detail.cols.close].forEach(function (c) {
+        if (c < 0) return;
+        var v = row[c];
+        if (v !== null && v !== undefined && String(v).trim() !== '') hasAmount = true;
+      });
+      // 明细区里冒出一行「只有文字、没有任何金额」的标题（账龄分析 / 说明 / 备注），
+      // 那是下一张表，到此为止——否则账龄区的空行会被当成明细空行
+      if (nameCell && !hasAmount && seenRow) break;
       if ((opts.isHidden && opts.isHidden(r))) continue;   // 隐藏行不写，用户看不见
-      // 硬判据：明细区的行才会被某个金额列的合计公式覆盖。
-      // 账龄区、说明区不在任何明细合计范围内，直接排除。
-      if (opts.inTotalRange && !opts.inTotalRange(r)) {
-        if (opts.uncovered) opts.uncovered.push(r);
-        continue;
-      }
       if (/^[一二三四五六七八九十]+$/.test(nameCell)) continue;
-      if (nameCell) continue;                       // 已经有内容，不覆盖
+      if (nameCell) { if (hasAmount) seenRow = true; continue; }   // 已经有内容，不覆盖
       // 名称格本身是公式 → 不是给人填的行
       if (detail.cols.name >= 0 && isFormula(r, detail.cols.name)) continue;
       // 这一行已经有金额了（哪怕没有名字）→ 多半是小计/说明行，不能往里塞客户
@@ -310,6 +314,12 @@
         if (c >= 0 && !isFormula(r, c)) writable++;
       });
       if (!writable) continue;
+      // 硬判据放在最后：先排除「不是空行」的，剩下的空行才谈「在不在合计范围内」
+      if (opts.inTotalRange && !opts.inTotalRange(r)) {
+        if (opts.uncovered) opts.uncovered.push(r);
+        continue;
+      }
+      seenRow = true;
       out.push(r);
     }
     return out;
@@ -713,6 +723,24 @@
     return lines.join('\r\n');
   }
 
+  /**
+   * 用户手动指定范围时用：只按「这一行是不是能填的空行」判断，
+   * 不再看合计范围（范围是人定的，机器只负责别写坏）。
+   */
+  function rowsInRange(rows, detail, isFormula, from, to, opts) {
+    opts = opts || {};
+    var b = findBlankRows(rows, detail, isFormula, {
+      startRow: from,
+      endRow: Math.min(to + 1, rows.length),
+      isOccupied: opts.isOccupied,
+      isMergedSubordinate: opts.isMergedSubordinate,
+      isHidden: opts.isHidden,
+      // 不看合计范围：用户指定了就按他指定的
+      inTotalRange: null
+    });
+    return b.filter(function (r) { return r >= from && r <= to; });
+  }
+
   /** 生成可粘贴的对照表（CSV 文本） */
   function buildCsv(plan, detail) {
     var cols = ['客户/项目名称', '期初', '本期借方', '本期贷方', '期末'];
@@ -748,6 +776,7 @@
     summarizeByParty: summarizeByParty,
     detectDetail: detectDetail,
     findBlankRows: findBlankRows,
+    rowsInRange: rowsInRange,
     listGroups: listGroups,
     planWrites: planWrites,
     parseOpening: parseOpening,
