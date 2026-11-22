@@ -30,6 +30,31 @@
     var rows = XLSX.utils.sheet_to_json(ws, { header: 1, range: range, raw: true, defval: null, blankrows: true });
     return { rows: new Array(range.s.r).concat(rows), firstRow: range.s.r };
   }
+
+  /**
+   * 明细区的硬判据：某一行只要被某个金额列的 SUM/SUBTOTAL 覆盖，就属于明细区。
+   * 账龄区、说明区不在任何明细合计范围内，自然被排除。
+   * 支持 $F$4:$F$8、SUBTOTAL(9,F4:F8)、跨表引用前缀。
+   */
+  function totalRanges(ws) {
+    var out = [];
+    Object.keys(ws).forEach(function (k) {
+      if (k.charAt(0) === '!') return;
+      var cell = ws[k];
+      if (!cell || !cell.f) return;
+      var f = String(cell.f);
+      var re = /(?:SUM|SUBTOTAL\s*\(\s*9\s*,)\s*\(?\s*(\$?[A-Z]{1,3}\$?\d+)\s*:\s*(\$?[A-Z]{1,3}\$?\d+)/gi;
+      var m;
+      while ((m = re.exec(f))) {
+        var a = XLSX.utils.decode_cell(m[1].replace(/\$/g, ''));
+        var b = XLSX.utils.decode_cell(m[2].replace(/\$/g, ''));
+        if (a.c !== b.c) continue;
+        out.push({ c: a.c, top: Math.min(a.r, b.r), bottom: Math.max(a.r, b.r) });
+      }
+    });
+    return out;
+  }
+
   function mergeRanges(ws) {
     return (ws["!merges"] || []).map(function (m) { return { s: m.s, e: m.e }; });
   }
@@ -239,14 +264,25 @@
     var isF = formulaChecker(ws);
     var ranges = arrayRanges(ws);
     var merges = mergeRanges(ws);
-    // 块标题：这一行的小计 SUM 指向**下方**（如 1、合并范围内小计 =SUM(H8:H11)），
-    // 那是「一段的抬头」；指向**上方**的是终结点（如 合计 =SUM(H3:H5)）
+    var moneyCols = [state.detail.cols.open, state.detail.cols.debit,
+      state.detail.cols.credit, state.detail.cols.close].filter(function (c) { return c >= 0; });
+    var tRanges = totalRanges(ws).filter(function (x) {
+      return moneyCols.indexOf(x.c) >= 0 && x.bottom > x.top;
+    });
+    var inTotalRange = tRanges.length ? function (r) {
+      for (var i = 0; i < tRanges.length; i++) {
+        if (r >= tRanges[i].top && r <= tRanges[i].bottom) return true;
+      }
+      return false;
+    } : null;
+    // 块标题：带合计/小计字样，且某个金额列的 SUM **正好从下一行开始**
+    // （1、合并范围内小计 =SUM(H8:H11)）。用已解析出的范围判断，
+    // 这样 $H$8、SUBTOTAL(9,…) 也能认。
     var blockHeaderCache = {};
     var isBlockHeader = function (r) {
       if (blockHeaderCache[r] !== undefined) return blockHeaderCache[r];
       blockHeaderCache[r] = false;
       var row = state.rows[r] || [];
-      // 「————」这类占位格会排在名称前面，所以要整行找带合计/小计字样的格子
       var hasLabel = false;
       for (var c1 = 0; c1 < row.length; c1++) {
         var v = row[c1];
@@ -255,22 +291,12 @@
         if (t && /合计|小计|总计|共计|累计/.test(t.replace(/[\s（）()：:]/g, ''))) { hasLabel = true; break; }
       }
       if (!hasLabel) return false;
-      var below = false;
-      ['open', 'debit', 'credit', 'close', 'no'].forEach(function (k) {
-        var c = state.detail.cols[k];
-        if (c === undefined || c < 0) return;
-        var cell = ws[XLSX.utils.encode_cell({ r: r, c: c })];
-        if (!cell || !cell.f) return;
-        var m = String(cell.f).match(/SUM\(\s*([A-Z]+\d+)\s*:/i);
-        if (m) {
-          var s0 = XLSX.utils.decode_cell(m[1]);
-          if (s0.r > r) below = true;
-        }
-      });
+      var below = tRanges.some(function (x) { return x.top === r + 1; });
       blockHeaderCache[r] = below;
       return below;
     };
     state.groups = Core.listGroups(state.rows, state.detail, isF, {
+      inTotalRange: inTotalRange,
       isBlockHeader: isBlockHeader,
       isOccupied: function (r, c) { return cellHasValue(ws, r, c) || inArray(ranges, r, c); },
       isMergedSubordinate: function (r, c) { return isMergedSubordinate(merges, r, c); },
@@ -278,7 +304,14 @@
     });
 
     var gi = Number($('groupSel').value || 0);
-    if (!state.groups[gi]) gi = 0;
+    if (!state.groups[gi] || !state.groups[gi].blanks.length) {
+      // 默认选第一个真的有空行的组：账龄区那种 0 空行的组不该抢默认
+      var firstWithBlanks = -1;
+      state.groups.forEach(function (g, ix) {
+        if (firstWithBlanks < 0 && g.blanks.length) firstWithBlanks = ix;
+      });
+      gi = firstWithBlanks >= 0 ? firstWithBlanks : 0;
+    }
     state.groupIndex = gi;
     var group = state.groups[gi];
     state.blanks = (group ? group.blanks : []).filter(function (r) {
@@ -287,6 +320,12 @@
     if (group && group.title && group.title !== '（未分组）') {
       state.problems.push('往「' + group.title + '」这一组填（第 ' + (group.startRow + 1) + '–' + group.endRow +
         ' 行），一组填完不会串到下一组。要填别的组请在上面切换。');
+    }
+    if (group && group.uncovered && group.uncovered.length) {
+      var uu = group.uncovered;
+      state.problems.push('第 ' + (uu[0] + 1) + '–' + (uu[uu.length - 1] + 1) + ' 行（共 ' + uu.length +
+        ' 行）是空的，但不在这个科目的合计公式范围内——填进去合计也不会算上。' +
+        '要填这几行，请先在底稿里把合计公式的范围扩到它们。');
     }
     var opening = Core.parseOpening($('openBox') ? $('openBox').value : '');
     state.opening = opening.map;
