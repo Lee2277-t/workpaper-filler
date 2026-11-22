@@ -8,7 +8,7 @@
 </head>
 <body>
 <header>
-  <h1>底稿填充助手 <span class="ver">v0.4.2</span></h1>
+  <h1>底稿填充助手 <span class="ver">v0.4.3</span></h1>
   <p class="sub">把序时账按客户汇总，填进底稿明细表的空格。<b>插行时，扩展合计范围前会询问确认。</b>文件只在本机浏览器里读，不上传。</p>
 </header>
 
@@ -58,7 +58,7 @@
       <button id="useAuto" class="ghost" type="button">用自动判断</button>
     </div>
     <p class="hint" id="rangeHint">自动判断只是建议。底稿版式千差万别，<b>请按行号核对一下</b>；
-    改了就严格按你给的范围填，不会多填一行。</p>
+    填了就以你给的为准（行号填错/填反/落在表头时会退回自动判断）。</p>
     <div class="row" style="margin-top:14px">
       <button id="genVba" type="button" disabled>下载填充宏（推荐）</button>
       <button id="genCsv" class="ghost" type="button" disabled>下载明细行 CSV</button>

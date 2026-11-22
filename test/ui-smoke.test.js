@@ -81,6 +81,35 @@ runSuite('界面冒烟', {
     check.equal(String(app.el('rowFrom').value), '3', '用自动判断后框里回到自动值');
   },
 
+  async '未授权的行号不能变成写入范围（填反 + 粘期初）'(check) {
+    // 复核员第 11 轮给的真夹具：4 户只有 2 个空行。
+    // 旧代码把填反的 8/5 改写成 3/4 却留着 rangeDirty，
+    // 于是粘期初时 3/4 被当成人工范围 → 只填 2 户、插行路径消失，用户从未指定过范围。
+    const rows = [
+      ['序号', '项目名称', '期初金额', '本期借方', '本期贷方', '期末金额'],
+      [],
+      [],
+      ['', '合计']
+    ];
+    const app = createApp();
+    await app.loadTemplate(workbook({ 明细: rows }));
+    await app.loadData(journal([
+      ['2026-01-05', '1221', '其他应收款', '甲', 100, 0],
+      ['2026-01-06', '1221', '其他应收款', '乙', 200, 0],
+      ['2026-01-07', '1221', '其他应收款', '丙', 300, 0],
+      ['2026-01-08', '1221', '其他应收款', '丁', 400, 0]
+    ]));
+    app.setSubject('1221');
+    app.el('rowFrom').value = '8';
+    app.el('rowTo').value = '5';
+    app.fire('rowFrom', 'input');
+    app.el('openBox').value = '甲 10';
+    app.fire('openBox', 'input');
+    // 4 户、2 空行 → 必须保留插行能力（genXlsx 禁用，宏可用）
+    check.equal(app.el('genXlsx').disabled, true, '还有户没地方放时不能直接写 xlsx');
+    check.equal(/多出来的/.test(app.el('infoBox').innerHTML), false, '没授权就不该说范围不够');
+  },
+
   async '选择工作表、核对汇总和明细行，再下载宏'(check) {
     const app = createApp();
     for (const id of exportButtons) check.equal(app.el(id).disabled, true, id + ' 初始禁用');

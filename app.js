@@ -363,12 +363,17 @@
           '实际从第 ' + (state.blanks[0] + 1) + ' 行开始。');
       }
       // 手填的范围如果跑到合计公式之外，钱写进去合计不算——要说清楚，但照填
+      state.outsideNote = '';
       if (inTotalRange && state.blanks.length) {
         var outside = state.blanks.filter(function (r) { return !inTotalRange(r); });
         if (outside.length) {
-          state.problems.push('注意：你指定的范围里，第 ' + (outside[0] + 1) + '–' +
-            (outside[outside.length - 1] + 1) + ' 行（共 ' + outside.length +
-            ' 行）不在任何合计公式范围内。填进去合计不会算上这几行，请自己确认这样对不对。');
+          var oFirst = outside[0] + 1, oLast = outside[outside.length - 1] + 1;
+          var oText = '其中第 ' + oFirst + (oLast > oFirst ? '–' + oLast : '') + ' 行（共 ' +
+            outside.length + ' 行）不在合计公式范围内，合计不会算上它们。';
+          state.problems.push('注意：你指定的范围里，第 ' + oFirst + (oLast > oFirst ? '–' + oLast : '') +
+            ' 行（共 ' + outside.length + ' 行）不在任何合计公式范围内。填进去合计不会算上这几行，请自己确认这样对不对。');
+          // 把这句话带进宏和导出，别只留在浏览器里
+          state.outsideNote = oText;
         }
       }
       // 手填时提一句「自动判断本来会给哪几行」，方便对照
@@ -510,12 +515,15 @@
     state.problems.forEach(function (p) { lines.push('<div class="note warn">' + esc(p) + '</div>'); });
     renderMacroPreview();
     if (!state.error && state.detail && state.tplWb) {
+      var where = state.blanks.length
+        ? '可填空行 ' + state.blanks.length + ' 行（第 ' + (state.blanks[0] + 1) + ' 行起）'
+        : '这个范围里没有能填的空行';
       lines.push('<div class="note">明细表「' + esc(state.sheetName) + '」：表头第 ' + (state.detail.headerRow + 1) +
-        ' 行，可填空行 ' + state.blanks.length + ' 行（从第 ' + ((state.blanks[0] || 0) + 1) + ' 行起）。' +
-        '填数时跳过公式格。</div>');
+        ' 行，' + where + '。填数时跳过公式格。</div>');
     }
     if (!state.tplWb) lines.push('<div class="note">先选底稿模板（带公式的那个 xlsx）。</div>');
-    else if (!state.sheetName) lines.push('<div class="note bad">这个底稿里没找到明细表（表头要有「项目名称 / 本期借方 / 本期贷方」）。</div>');
+    else if (!state.sheetName) lines.push('<div class="note bad">这个底稿里没找到明细表（表头要在前 60 行里，' +
+      '并且有「项目名称 / 本期借方 / 本期贷方」这几列）。</div>');
     info.innerHTML = lines.join('');
     renderGroups();
     renderStats();
@@ -542,7 +550,8 @@
     if (!state.plan.length || !state.sheetName) return '';
     return Core.buildVBA(state.plan, state.sheetName, {
       missing: state.missing || 0,
-      insertAfter: state.insertAfter
+      insertAfter: state.insertAfter,
+      outsideNote: state.outsideNote || ''
     });
   }
 
@@ -596,7 +605,7 @@
     });
     XLSX.writeFile(wb, '已填充_' + (state.tplName || '底稿'));
     $('genInfo').textContent = '已生成填好的底稿。注意：这个方式可能丢掉部分格式，' +
-      '要完全保真请用宏。';
+      '要完全保真请用宏。' + (state.outsideNote ? ' ' + state.outsideNote : '');
   }
 
   function download(blob, name) {

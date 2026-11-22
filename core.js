@@ -15,7 +15,7 @@
 })(typeof self !== 'undefined' ? self : this, function () {
   'use strict';
 
-  var VERSION = '0.4.2';
+  var VERSION = '0.4.3';
 
   /* ---------------- 基础 ---------------- */
 
@@ -197,7 +197,7 @@
    */
   function detectDetail(rows, firstRow) {
     var start = firstRow || 0;
-    for (var r = start; r < Math.min(rows.length, start + 20); r++) {
+    for (var r = start; r < Math.min(rows.length, start + 60); r++) {
       var row = rows[r] || [];
       var amounts = detectDetailAmounts(row);
       var map = amounts.cols;
@@ -663,7 +663,9 @@
       lines.push('    End If');
       lines.push('    Say result');
     } else {
-      lines.push('    Say "已填入 ' + plan.length + ' 户。公式没动。"');
+      var doneMsg = '已填入 ' + plan.length + ' 户。公式没动。';
+      if (opts.outsideNote) doneMsg += ' ' + opts.outsideNote;
+      lines.push('    Say "' + doneMsg + '"');
     }
     lines.push('    Exit Sub');
     lines.push('FormulaFound:');

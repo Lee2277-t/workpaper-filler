@@ -35,7 +35,7 @@ runSuite('缺陷回归', {
         ['2026-01-05', '1221', '其他应收款', '合成甲', 100, 0],
         ['2026-01-06', '1221', '其他应收款', '合成乙', 200, 0]
       ]));
-      check.match(app.el('infoBox').innerHTML, /可填空行 2 行（从第 3 行起）/, total);
+      check.match(app.el('infoBox').innerHTML, /可填空行 2 行（第 3 行起）/, total);
       const out = await exportDetail(app);
       check.deepEqual([out.B3?.v, out.B4?.v, out.B6, out.B9], ['合成甲', '合成乙', undefined, undefined]);
       check.equal(out.F5?.f, 'SUM(F3:F4)');
@@ -151,7 +151,7 @@ runSuite('缺陷回归', {
     await app.loadTemplate(template);
     await app.loadData(data);
     app.setSubject('1221');
-    check.match(app.el('infoBox').innerHTML, /表头第 4 行.*从第 5 行起/);
+    check.match(app.el('infoBox').innerHTML, /表头第 4 行.*第 5 行起/);
     app.fire('genVba', 'click');
     check.match((await app.readDownload('bas')).bytes.toString('utf8'), /ws\.Range\("D5"\)\.Value = "合成甲"/);
     app.fire('genXlsx', 'click');
