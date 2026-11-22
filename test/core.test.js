@@ -123,8 +123,10 @@ eq(cell(res.plan[0], 6).value, 300, '贷方 300 元');
 eq(cell(res.plan[0], 7).value, 700, '期末 = 0 + 1000 - 300');
 
 const tooMany = Core.planWrites(parties, [5], d, {});
-eq(tooMany.plan.length, 0, '空行不够时不生成');
-ok(tooMany.problems.join('').indexOf('空行') >= 0, '说明空行不够');
+eq(tooMany.plan.length, 2, '空行不够也照排，缺的行后面补');
+eq(tooMany.missing, 1, '算出缺 1 行');
+ok(tooMany.problems.join('').indexOf('补 1 行') >= 0, '说明要补几行');
+
 
 /* ---------------- 宏 ---------------- */
 

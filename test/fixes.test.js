@@ -81,7 +81,9 @@ runSuite('缺陷回归', {
     app.setSubject('1221');
     app.fire('genVba', 'click');
     const lines = (await app.readDownload('bas')).bytes.toString('utf8').split('\r\n');
-    const beforeWrite = lines.slice(0, lines.findIndex(line => line.includes('ThisWorkbook.SaveCopyAs')));
+    // 守卫语句现在排在备份之后，取到第一句写入之前就行
+    const firstWrite = lines.findIndex(line => /^    ws\\.Range\\('[A-Z]+\\d+'\\)\\.Value = /.test(line));
+    const beforeWrite = lines.slice(0, firstWrite);
     const guards = beforeWrite.flatMap(line => {
       const match = line.match(/^    If ws\.Range\("([A-Z]+\d+)"\)\.HasFormula Or ws\.Range\("\1"\)\.HasArray Then GoTo FormulaFound$/);
       return match ? [match[1]] : [];

@@ -318,20 +318,23 @@
     opts = opts || {};
     var canWrite = opts.canWrite || function () { return true; };
     var plan = [], problems = [];
-    if (parties.length > blanks.length) {
-      problems.push('客户有 ' + parties.length + ' 户，明细表只剩 ' + blanks.length + ' 个空行。' +
-        '请先在底稿里插入足够的空行，或缩小科目范围。');
-      return { plan: [], problems: problems };
-    }
+    // 空行不够不再拒绝：Excel 本来就该插行，插进去公式会跟着往下走。
+    // 这里算出缺几行、从哪一行续，宏里负责插。
+    var missing = Math.max(0, parties.length - blanks.length);
+    var lastBlank = blanks.length ? blanks[blanks.length - 1] : -1;
+    var rows = blanks.slice();
+    for (var k = 0; k < missing; k++) rows.push(lastBlank + 1 + k);
+
     for (var i = 0; i < parties.length; i++) {
-      var p = parties[i], row = blanks[i];
+      var p = parties[i], row = rows[i];
       var open = opts.openCents ? (opts.openCents[p.party] || 0) : 0;
       var close = open + p.debit - p.credit;
       var cells = [];
-      // 逐格判断：公式格不写，让它自己算
+      // 逐格判断：公式格不写，让它自己算。
+      // 新插出来的行还没有公式（宏会先复制上一行再写），这里照样写。
       var add = function (col, value, text) {
         if (col < 0) return;
-        if (!canWrite(row, col)) return;
+        if (row <= lastBlank && !canWrite(row, col)) return;
         cells.push({ col: col, value: value, text: !!text });
       };
       add(detail.cols.name, p.party, true);
@@ -339,9 +342,15 @@
       add(detail.cols.debit, p.debit / 100);
       add(detail.cols.credit, p.credit / 100);
       add(detail.cols.close, close / 100);
-      plan.push({ row: row, party: p.party, cells: cells, debit: p.debit, credit: p.credit, close: close });
+      plan.push({ row: row, party: p.party, cells: cells, debit: p.debit, credit: p.credit, close: close, inserted: row > lastBlank });
     }
-    return { plan: plan, problems: problems };
+
+    if (missing > 0) {
+      problems.push('客户有 ' + parties.length + ' 户，明细表只有 ' + blanks.length + ' 个空行，' +
+        '要往下补 ' + missing + ' 行。用「下载填充宏」会自动插：照第 ' + (lastBlank + 1) +
+        ' 行复制，公式跟着往下走；「直接生成 xlsx」不支持插行，这种情况请用宏。');
+    }
+    return { plan: plan, problems: problems, missing: missing, insertAfter: lastBlank };
   }
 
   /* ---------------- 输出：宏 ---------------- */
@@ -357,16 +366,32 @@
     return s;
   }
 
-  /** 生成 VBA：只写计划里的格，绝不碰公式 */
+  /** 生成 VBA：只写计划里的格，绝不碰公式；不够的行自动插，公式跟着复制 */
   function buildVBA(plan, sheetName, opts) {
     opts = opts || {};
     var lines = [];
+    var missing = opts.missing || 0;
+    var insertAfter = opts.insertAfter;      // 0 基；插在它下面
     lines.push("' 底稿填充助手 生成");
     lines.push("' 用法：Excel 里 Alt+F11 → 插入 → 模块 → 粘贴本段 → F5");
     lines.push("' 只写下面这些格，公式和其他内容一律不动");
     lines.push('Sub 填充底稿明细()');
     lines.push('    Dim ws As Worksheet');
     lines.push('    Set ws = ThisWorkbook.Worksheets("' + String(sheetName).replace(/"/g, '""') + '")');
+    if (opts.backup !== false) {
+      lines.push("    ' 先备份一份，填错了还能退回来");
+      lines.push('    ThisWorkbook.SaveCopyAs ThisWorkbook.Path & "\\" & ThisWorkbook.Name & ".bak.xlsx"');
+    }
+    if (missing > 0 && insertAfter >= 0) {
+      // 把最后一行明细整行复制下来插入：格式和公式都跟着，相对引用自动顺延
+      var src = insertAfter + 1;               // Excel 行号
+      lines.push("    ' 空行不够：照第 " + src + " 行复制 " + missing + ' 行，公式会跟着往下走');
+      lines.push('    Application.ScreenUpdating = False');
+      lines.push('    ws.Rows(' + src + ').Copy');
+      lines.push('    ws.Rows(' + (src + 1) + ':' + (src + missing) + ').Insert Shift:=xlDown');
+      lines.push('    Application.CutCopyMode = False');
+      lines.push('    Application.ScreenUpdating = True');
+    }
     var guards = [], writes = [];
     for (var i = 0; i < plan.length; i++) {
       var item = plan[i];
@@ -381,12 +406,9 @@
       }
     }
     lines = lines.concat(guards);
-    if (opts.backup !== false) {
-      lines.push("    ' 先备份一份，填错了还能退回来");
-      lines.push('    ThisWorkbook.SaveCopyAs ThisWorkbook.Path & "\\" & ThisWorkbook.Name & ".bak.xlsx"');
-    }
     lines = lines.concat(writes);
-    lines.push('    MsgBox "已填入 ' + plan.length + ' 户，公式未改动。"');
+    lines.push('    MsgBox "已填入 ' + plan.length + ' 户' + (missing > 0 ? '，并补了 ' + missing + ' 行' : '') +
+      '。公式未改动，请核对合计行是否已把新行算进去。"');
     lines.push('    Exit Sub');
     lines.push('FormulaFound:');
     lines.push('    MsgBox "目标格包含公式，已停止，没有写入任何单元格。"');

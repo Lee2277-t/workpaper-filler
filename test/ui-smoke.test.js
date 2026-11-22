@@ -66,11 +66,13 @@ runSuite('界面冒烟', {
     app.setSubject('1221');
     app.el('sheetSel').value = '容量不足';
     app.fire('sheetSel', 'change');
-    for (const id of exportButtons) check.equal(app.el(id).disabled, true);
-    check.match(app.el('infoBox').innerHTML, /客户有 2 户.*只剩 1 个空行.*插入足够的空行/);
-    check.equal(app.el('planBody').innerHTML, '');
+    // 行数不够也能做：宏负责插行，直接写 xlsx 不行
+    check.equal(app.el('genVba').disabled, false, '宏可用');
+    check.equal(app.el('genXlsx').disabled, true, 'xlsx 禁用');
+    check.match(app.el('infoBox').innerHTML, /客户有 2 户.*只有 1 个空行.*要往下补 1 行/);
     app.fire('genVba', 'click');
-    check.equal(await app.readDownload('bas'), null);
+    const vba = (await app.readDownload('bas')).bytes.toString('utf8');
+    check.match(vba, /Insert Shift:=xlDown/);
 
     await app.loadTemplate(workbook({ 封面: [['无明细表的合成底稿']] }));
     check.deepEqual(app.el('sheetSel').children, []);

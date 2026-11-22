@@ -40,14 +40,19 @@ runSuite('边界输入', {
     check.deepEqual(app.el('sheetSel').children, []);
     await checkBlocked(check, app);
   },
-  async '100 户只有 5 个空行，整批停止'(check) {
+  async '100 户只有 5 个空行，排满并说明要补几行'(check) {
     const customers = Array.from({ length: 100 }, (_, i) => [
       '2026-01-05', '1221', '其他应收款', '合成客户' + (i + 1), 10, 1
     ]);
     const app = await prepare(journal(customers));
-    check.match(app.el('infoBox').innerHTML, /客户有 100 户.*只剩 5 个空行/);
+    check.match(app.el('infoBox').innerHTML, /客户有 100 户.*只有 5 个空行.*要往下补 95 行/);
     check.match(app.el('statBox').innerHTML, />100 户<.*>1,000\.00<.*>100\.00<.*>5 行</);
-    await checkBlocked(check, app);
+    // 行数不够也让做：宏会插行，直接写 xlsx 不行
+    check.equal(app.el('genXlsx').disabled, true, '直接生成 xlsx 要禁用');
+    app.fire('genVba', 'click');
+    const vba = (await app.readDownload('bas')).bytes.toString('utf8');
+    check.match(vba, /ws\.Rows\(\d+\)\.Copy/);
+    check.match(vba, /Insert Shift:=xlDown/);
   },
   async '客户名里的双引号在 VBA 中成对转义'(check) {
     const app = await prepare(journal([

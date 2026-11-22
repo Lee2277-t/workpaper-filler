@@ -194,6 +194,8 @@
       canWrite: function (r, c) { return !isF(r, c); }
     });
     state.plan = res.plan;
+    state.missing = res.missing || 0;
+    state.insertAfter = res.insertAfter;
     state.problems = state.problems.concat(res.problems);
     renderAll();
   }
@@ -283,18 +285,27 @@
 
   function refreshButtons() {
     var ok = state.plan.length > 0;
+    var needInsert = (state.missing || 0) > 0;
     $('genVba').disabled = !ok;
-    $('genXlsx').disabled = !ok;
     $('genCsv').disabled = !ok;
+    // 直接写 xlsx 没法插行：行数不够时只给宏和 CSV
+    $('genXlsx').disabled = !ok || needInsert;
+    $('genXlsx').title = needInsert ? '行数不够，需要插行，请用填充宏' : '';
   }
 
   /* ---------------- 导出 ---------------- */
 
   function exportVba() {
-    var vba = Core.buildVBA(state.plan, state.sheetName, {});
+    var vba = Core.buildVBA(state.plan, state.sheetName, {
+      missing: state.missing || 0,
+      insertAfter: state.insertAfter
+    });
     download(new Blob([vba], { type: 'text/plain;charset=utf-8' }),
       '填充宏_' + state.sheetName + '.bas');
-    $('genInfo').textContent = '已生成宏：在 Excel 里 Alt+F11 → 插入模块 → 粘贴 → F5。公式不会被改动。';
+    $('genInfo').textContent = (state.missing || 0) > 0
+      ? '已生成宏：会先照最后一行复制插入 ' + state.missing + ' 行（公式跟着往下走），再填数。' +
+        'Alt+F11 → 插入模块 → 粘贴 → F5。跑完请看一眼合计行有没有把新行算进去。'
+      : '已生成宏：在 Excel 里 Alt+F11 → 插入模块 → 粘贴 → F5。公式不会被改动。';
   }
 
   function exportCsv() {
