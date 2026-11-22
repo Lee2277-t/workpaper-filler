@@ -145,6 +145,39 @@
 
   /* ---------------- 计算 ---------------- */
 
+  /**
+   * 期末方向：模板自己的公式最可信。
+   * 预收款项 H7 = ROUND(E7-F7+G7,2)   → 期初 − 借 + 贷（负债，sign = -1）
+   * 应收账款 K8 = ROUND(H8+I8-J8,2)   → 期初 + 借 − 贷（资产，sign = +1）
+   * 认不出公式就看科目代码：2 负债 / 3 权益 → -1
+   */
+  function inferCloseSign(ws, detail, subject) {
+    var col = detail.cols.close, dbt = detail.cols.debit, crd = detail.cols.credit, opn = detail.cols.open;
+    if (ws && col >= 0 && dbt >= 0) {
+      var addr = XLSX.utils.encode_cell({ r: detail.headerRow + 1, c: col });
+      var cell = ws[addr];
+      // 表头下一行可能没公式，往后找几行
+      for (var k = 1; k <= 6 && (!cell || !cell.f); k++) {
+        cell = ws[XLSX.utils.encode_cell({ r: detail.headerRow + k, c: col })];
+      }
+      if (cell && cell.f) {
+        var expr = String(cell.f)
+          .replace(/^=?\s*ROUND\s*\(/i, '')
+          .replace(/,\s*[-\d.]+\s*\)\s*$/i, '');
+        var re = /([+-]?)\s*\$?([A-Z]{1,3})\$?\d+/g, m, cbt = 0;
+        while ((m = re.exec(expr))) {
+          var letter = m[2], colIdx = XLSX.utils.decode_col(letter);
+          if (colIdx !== dbt) continue;
+          cbt += m[1] === '-' ? -1 : 1;
+        }
+        if (cbt !== 0) return { sign: cbt > 0 ? 1 : -1, from: 'template' };
+      }
+    }
+    var s = String(subject || '').trim();
+    if (/^[23]/.test(s)) return { sign: -1, from: 'code' };
+    return { sign: 1, from: 'default' };
+  }
+
   function recompute() {
     state.error = '';
     state.problems = [];
@@ -215,7 +248,12 @@
         opening.bad.map(function (b) { return b.line; }).join('、') +
         ' 行），应该是「客户名 + 金额」两列。');
     }
+    var wsNow = state.tplWb.Sheets[state.sheetName];
+    var signInfo = inferCloseSign(wsNow, state.detail, $('subject').value);
+    state.closeSign = signInfo.sign;
+    state.closeSignFrom = signInfo.from;
     var res = Core.planWrites(parties, state.blanks, state.detail, {
+      closeSign: signInfo.sign,
       openCents: Object.keys(opening.map).length ? opening.map : null,
       canWrite: function (r, c) { return !isF(r, c); },
       isMergedSubordinate: function (r, c) { return isMergedSubordinate(merges, r, c); }
@@ -253,6 +291,14 @@
     html += '<div class="stat"><span class="k">客户户数</span><span class="v">' + state.parties.length + ' 户</span></div>';
     html += '<div class="stat"><span class="k">借方合计</span><span class="v">' + money(debit) + '</span></div>';
     html += '<div class="stat"><span class="k">贷方合计</span><span class="v">' + money(credit) + '</span></div>';
+    var dir = state.closeSign === -1 ? '期初 − 借 + 贷' : '期初 + 借 − 贷';
+    var from = state.closeSignFrom === 'template' ? '照模板公式' : (state.closeSignFrom === 'code' ? '按科目性质' : '默认');
+    html += '<div class="stat"><span class="k">期末方向</span><span class="v">' + dir + '（' + from + '）</span></div>';
+    var dir = state.closeSign === -1 ? '期初 − 借 + 贷' : '期初 + 借 − 贷';
+    var from = state.closeSignFrom === 'template' ? '照模板公式'
+      : (state.closeSignFrom === 'code' ? '按科目性质' : '默认');
+    html += '<div class="stat"><span class="k">期末方向</span><span class="v">' + dir +
+      '（' + from + '）</span></div>';
     html += '<div class="stat"><span class="k">明细表空行</span><span class="v">' + state.blanks.length + ' 行</span></div>';
     $('statBox').innerHTML = html;
   }
@@ -321,8 +367,11 @@
     $('genVba').disabled = !ok;
     $('genCsv').disabled = !ok;
     // 直接写 xlsx 没法插行：行数不够时只给宏和 CSV
-    $('genXlsx').disabled = !ok || needInsert;
-    $('genXlsx').title = needInsert ? '行数不够，需要插行，请用填充宏' : '';
+    // 宏底稿（.xlsm）直接用 SheetJS 重写会把 VBA 弄丢，只能走宏
+    $('genXlsx').disabled = !ok || needInsert || !!state.isMacroTemplate;
+    $('genXlsx').title = needInsert
+      ? '行数不够，需要插行，请用填充宏'
+      : (state.isMacroTemplate ? '这是宏底稿，直接生成会丢掉 VBA，请用填充宏' : '');
   }
 
   /* ---------------- 导出 ---------------- */
@@ -390,6 +439,8 @@
         if (!res.ok) { state.error = '底稿读不了：' + res.error; renderAll(); return; }
         state.tplWb = res.wb;
         state.tplName = res.fileName;
+        // 宏底稿重写会丢 VBA，只能走填充宏
+        state.isMacroTemplate = /\.xlsm$/i.test(f.name || res.fileName || '');
         var problems = [];
         var list = listDetailSheets(res.wb, problems);
         $('tplInfo').textContent = f.name + '（' + res.wb.SheetNames.length + ' 张表，认出 ' + list.length + ' 张明细表）' +

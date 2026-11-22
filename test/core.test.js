@@ -179,6 +179,31 @@ console.log('\n[分组边界 / 空行]');
   ok(zero.problems.join('').indexOf('没有可填的空行') >= 0, '0 空行时说清楚要先插行');
 }
 
+
+console.log('\n[期末方向]');
+{
+  const d2 = { cols: { name: 1, open: 4, debit: 5, credit: 6, close: 7 }, headerRow: 0 };
+  const p = [{ party: '甲', debit: 20000, credit: 30000 }];
+  const asAsset = Core.planWrites(p, [4], d2, { openCents: { 甲: 100000 } });
+  eq(asAsset.plan[0].close, 90000, '资产口径：1000 + 200 - 300 = 900');
+  const asLiability = Core.planWrites(p, [4], d2, { openCents: { 甲: 100000 }, closeSign: -1 });
+  eq(asLiability.plan[0].close, 110000, '负债口径：1000 - 200 + 300 = 1100');
+  const cell7 = cell(asLiability.plan[0], 7);
+  eq(cell7 && cell7.value, 1100, '负债口径的期末写进第 7 列');
+}
+
+console.log('\n[未来行的合并判断]');
+{
+  const d2 = { cols: { name: 1, open: 4, debit: 5, credit: 6, close: 7 }, headerRow: 0 };
+  // 第 5 行（0基 4）是最后一个空行，第 6 行是合计行且被合并
+  const isMerged = (r, cc) => r === 5 && cc >= 0;
+  const res = Core.planWrites(
+    [{ party: '甲', debit: 100, credit: 0 }, { party: '乙', debit: 200, credit: 0 }],
+    [4], d2, { isMergedSubordinate: isMerged, canWrite: () => true });
+  eq(res.plan.length, 2, '合并的合计行不该挡住要插进来的客户');
+  eq(res.plan[1].row, 5, '第二户排在模板行之后，插行后落到它下面');
+}
+
 console.log('\n[生成宏]');
 const vba = Core.buildVBA(res.plan, '预收款项明细表', { backup: false });
 ok(vba.indexOf('Sub 填充底稿明细()') >= 0, '有 Sub 入口');

@@ -2,11 +2,11 @@ const { createApp, workbook, detailRows, journal, runSuite, XLSX } = require('./
 
 const data = journal([['2026-01-05', '1221', '其他应收款', '合成甲', 100, 5]]);
 
-async function prepareDetail(template, source = data) {
+async function prepareDetail(template, source = data, subject = '1221') {
   const app = createApp();
   await app.loadTemplate(template);
   await app.loadData(source);
-  app.setSubject('1221');
+  app.setSubject(subject);
   return app;
 }
 
@@ -227,5 +227,48 @@ runSuite('缺陷回归', {
     check.deepEqual(guards, ['B3', 'C3', 'D3', 'E3', 'F3']);
     check.match(lines.join('\n'), /Exit Sub\nFormulaFound:\n    Say ".*公式.*没有写入/);
     check.match(lines.join('\n'), /Private Const QUIET As Boolean = False/);
-  }
+  },
+
+  async '12 逐格相加的合计要被指出，完成消息不能说「已自动算进去」'(check) {
+    const rows = detailRows(2);
+    const template = workbook({ 明细: rows });
+    template.Sheets.明细.F5 = { t: 'n', f: 'D3+D4', v: 0 };
+    const app = await prepareDetail(template, journal([100, 200, 300].map((amount, i) =>
+      ['2026-01-05', '1221', '其他应收款', '合成客户' + (i + 1), amount, 0]
+    )));
+    const vba = await exportMacro(app);
+    // 裸的 =D3+D4 以数字结尾，也必须在 SUM 判断之前被计数
+    const sumIdx = vba.indexOf('If Left$(UCase$(formula), 5) <> "=SUM(" Then');
+    const rightIdx = vba.indexOf('If Right$(formula, 1) <> ")" Then GoTo NextFormula');
+    check.ok(sumIdx >= 0 && rightIdx > sumIdx, '先判 SUM 再判右括号');
+    check.match(vba, /Private plainTotals As Long/);
+    check.match(vba, /个合计是逐格相加写的/);
+    check.match(vba, /插行后 Excel 不会把它们扩到新行，合计会漏/);
+    // 「自动算进去」那句只能留在最后的兜底分支里，逐格相加要先被拦住
+    const plainIdx = vba.indexOf('个合计是逐格相加写的');
+    const autoIdx = vba.indexOf('Excel 已自动把它算进去');
+    check.ok(plainIdx >= 0 && autoIdx > plainIdx, '逐格相加的分支排在「自动算进去」前面');
+  },
+  async '13 QUIET 打开时自动扩合计，不能静默少计'(check) {
+    const rows = detailRows(2);
+    rows[2] = ['', '已有客户', 0, 50, 0, 50];
+    const template = workbook({ 明细: rows });
+    template.Sheets.明细.F5 = { t: 'n', f: 'SUM(F3:F3)', v: 50 };
+    const app = await prepareDetail(template, journal([100, 200, 300].map((amount, i) =>
+      ['2026-01-05', '1221', '其他应收款', '合成客户' + (i + 1), amount, 0]
+    )));
+    const vba = await exportMacro(app);
+    check.match(vba, /If QUIET Then ConfirmTotalExpansion = True: Exit Function/);
+  },
+  async '14 期末列不是公式时按科目性质定方向'(check) {
+    const rows = detailRows(3);
+    const template = workbook({ 明细: rows });
+    const app = await prepareDetail(template, journal([
+      ['2026-01-05', '2203', '预收款项', '合成甲', 0, 300],
+      ['2026-01-06', '2203', '预收款项', '合成乙', 0, 500]
+    ]), '2203');
+    check.match(app.el('statBox').innerHTML, /期初 − 借 \+ 贷/);
+    const out = await exportDetail(app);
+    check.equal(out.F3?.v, 300, '预收：期末 = 0 - 0 + 300 = 300（负债方向）');
+  },
 });

@@ -15,7 +15,7 @@
 })(typeof self !== 'undefined' ? self : this, function () {
   'use strict';
 
-  var VERSION = '0.2.1';
+  var VERSION = '0.3.0';
 
   /* ---------------- 基础 ---------------- */
 
@@ -369,7 +369,8 @@
         startRow: start,
         endRow: marks[0].row,
         isOccupied: opts.isOccupied,
-        isMergedSubordinate: opts.isMergedSubordinate
+        isMergedSubordinate: opts.isMergedSubordinate,
+        isHidden: opts.isHidden
       }).filter(function (rr) { return rr >= start && rr < marks[0].row; });
       if (headBlanks.length) {
         out.push({ title: '（分组标题以上）', startRow: start, endRow: marks[0].row, blanks: headBlanks });
@@ -431,15 +432,16 @@
       var p = parties[i], row = rows[i];
       var open = opts.openCents ? (opts.openCents[p.party] || 0) : 0;
       if (opts.openCents && !(p.party in opts.openCents)) missingOpen.push(p.party);
-      var close = open + p.debit - p.credit;
+      // 期末方向：资产类 期初+借−贷；负债/权益类 期初−借+贷
+      var sign = opts.closeSign === -1 ? -1 : 1;
+      var close = open + sign * p.debit - sign * p.credit;
       var cells = [];
+      // 新插的行是照最后一行复制的，公式和合并都一起下来了：一律按模板行判断
+      var refRow = row <= lastBlank ? row : lastBlank;
       // 逐格判断：公式格不写，让它自己算。
-      // 新插出来的行还没有公式（宏会先复制上一行再写），这里照样写。
       var add = function (col, value, text) {
         if (col < 0) return;
-        if (isMergedSub(row, col)) return;          // 合并区从属格写进去会丢
-        // 新插的行是照最后一行复制的，公式也一起下来了：按模板行判断能不能写
-        var refRow = row <= lastBlank ? row : lastBlank;
+        if (isMergedSub(refRow, col)) return;       // 合并区从属格写进去会丢
         if (!canWrite(refRow, col)) return;
         cells.push({ col: col, value: value, text: !!text });
       };
@@ -449,7 +451,7 @@
       var blocked = null;
       for (var w = 0; w < wanted.length; w++) {
         var wc = wanted[w];
-        if (wc >= 0 && isMergedSub(row, wc)) { blocked = wc; break; }
+        if (wc >= 0 && isMergedSub(refRow, wc)) { blocked = wc; break; }
       }
       if (blocked !== null) {
         mergedOut.push({ party: p.party, row: row, col: blocked });
@@ -519,6 +521,9 @@
     lines.push('Private Sub Say(msg As String, Optional icon As Long = 64)');
     lines.push('    If Not QUIET Then MsgBox msg, icon, "底稿填充助手"');
     lines.push('End Sub');
+    lines.push('');
+    lines.push("' 逐格相加的合计个数（=D3+D4 这种），插行后不会自动含新行");
+    lines.push('Private plainTotals As Long');
     lines.push('');
     lines.push('Sub 填充底稿明细()');
     lines.push('    Dim ws As Worksheet');
@@ -590,6 +595,9 @@
       lines.push('    ElseIf totalChanges.Count > 0 Then');
       lines.push('        result = result & vbCrLf & totalChanges.Count & ' +
         '" 个合计公式的范围没动，它们会漏掉新增行，需要你自己核一下。"');
+      lines.push('    ElseIf plainTotals > 0 Then');
+      lines.push('        result = result & vbCrLf & plainTotals & " 个合计是逐格相加写的（比如 =D3+D4），" & _');
+      lines.push('            "插行后 Excel 不会把它们扩到新行，合计会漏，请手工改。"');
       lines.push('    Else');
       lines.push('        result = result & vbCrLf & "新行插在合计公式的范围内，Excel 已自动把它算进去，公式没动。"');
       lines.push('    End If');
@@ -631,7 +639,6 @@
         '    Dim formulas As Range, cell As Range, sumRange As Range',
         '    Dim formula As String, refText As String, address As String, proposed As String, examples As String',
         '    Dim startRef As String, endRef As String, parts() As String',
-        '    Dim plainTotals As Long',
         '    On Error Resume Next',
         '    Set formulas = ws.UsedRange.SpecialCells(xlCellTypeFormulas)',
         '    On Error GoTo 0',
@@ -639,11 +646,11 @@
         '    For Each cell In formulas.Cells',
         '        If cell.Row <= lastDetailRow Or cell.HasArray Then GoTo NextFormula',
         '        formula = cell.Formula',
-        '        If Right$(formula, 1) <> ")" Then GoTo NextFormula',
         '        If Left$(UCase$(formula), 5) <> "=SUM(" Then',
         '            If InStr(formula, "+") > 0 Then plainTotals = plainTotals + 1',
         '            GoTo NextFormula',
         '        End If',
+        '        If Right$(formula, 1) <> ")" Then GoTo NextFormula',
         '        refText = Replace(Mid$(formula, 6, Len(formula) - 6), " ", "")',
         '        Set sumRange = Nothing',
         '        On Error Resume Next',
@@ -668,7 +675,7 @@
         '        "插行后不会自动包含新行，请手工核一下。", vbExclamation',
         '    If changes.Count = 0 Then Exit Function',
         '    If changes.Count > 3 Then examples = examples & vbCrLf & "其余 " & (changes.Count - 3) & " 个合计公式同样扩至新增行末尾。"',
-        '    If QUIET Then Exit Function',
+        '    If QUIET Then ConfirmTotalExpansion = True: Exit Function',
         '    ConfirmTotalExpansion = (MsgBox(changes.Count & " 个合计公式将漏掉新增的 " & insertedRows & " 行。" & examples & vbCrLf & _',
         '        "是否扩展这些合计范围？选否将照常插行并填数，保留这些公式的原范围。", vbYesNo + vbDefaultButton2 + vbExclamation, "合计范围确认") = vbYes)',
         'End Function');
