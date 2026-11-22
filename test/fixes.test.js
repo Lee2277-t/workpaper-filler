@@ -242,6 +242,9 @@ runSuite('缺陷回归', {
     const rightIdx = vba.indexOf('If Right$(formula, 1) <> ")" Then GoTo NextFormula');
     check.ok(sumIdx >= 0 && rightIdx > sumIdx, '先判 SUM 再判右括号');
     check.match(vba, /Private plainTotals As Long/);
+    // VBE 实测：模块级变量放在 End Sub 后面会报「在 End Sub 后面只能出现注释」
+    const firstProc = vba.indexOf('Private Sub Say');
+    check.ok(vba.indexOf('Private plainTotals As Long') < firstProc, '模块级变量必须写在过程之前');
     check.match(vba, /个合计是逐格相加写的/);
     check.match(vba, /插行后 Excel 不会把它们扩到新行，合计会漏/);
     // 「自动算进去」那句只能留在最后的兜底分支里，逐格相加要先被拦住

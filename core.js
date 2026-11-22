@@ -15,7 +15,7 @@
 })(typeof self !== 'undefined' ? self : this, function () {
   'use strict';
 
-  var VERSION = '0.3.1';
+  var VERSION = '0.3.2';
 
   /* ---------------- 基础 ---------------- */
 
@@ -517,13 +517,14 @@
     lines.push("' 不想看到弹窗就把它改成 True：照样填数，只是不提示");
     lines.push('Private Const QUIET As Boolean = False');
     lines.push('');
+    lines.push("' 逐格相加的合计个数（=D3+D4 这种），插行后不会自动含新行");
+    lines.push("' VBA 要求模块级变量都写在过程之前，不能放在 End Sub 后面");
+    lines.push('Private plainTotals As Long');
+    lines.push('');
     lines.push("' 所有提示都走这里，方便你一处关掉");
     lines.push('Private Sub Say(msg As String, Optional icon As Long = 64)');
     lines.push('    If Not QUIET Then MsgBox msg, icon, "底稿填充助手"');
     lines.push('End Sub');
-    lines.push('');
-    lines.push("' 逐格相加的合计个数（=D3+D4 这种），插行后不会自动含新行");
-    lines.push('Private plainTotals As Long');
     lines.push('');
     lines.push('Sub 填充底稿明细()');
     lines.push('    Dim ws As Worksheet');
