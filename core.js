@@ -463,10 +463,29 @@
     lines.push(willInsert ? "' 填写计划格，扩展合计公式前先询问" : "' 只写下面这些格，公式和其他内容一律不动");
     lines.push('Sub 填充底稿明细()');
     lines.push('    Dim ws As Worksheet');
+    lines.push('    On Error GoTo Fail');
+    // 名字写错、工作表被删时 1004 会先炸在这里，给一句人话
+    lines.push('    On Error Resume Next');
     lines.push('    Set ws = ThisWorkbook.Worksheets("' + String(sheetName).replace(/"/g, '""') + '")');
+    lines.push('    On Error GoTo Fail');
+    lines.push('    If ws Is Nothing Then');
+    lines.push('        MsgBox "找不到工作表「' + String(sheetName).replace(/"/g, '""') + '」。' +
+      '可能改了表名，或者宏跑在另一个工作簿上（要在底稿那个工作簿里跑）。", vbExclamation');
+    lines.push('        Exit Sub');
+    lines.push('    End If');
+    lines.push('    If ws.ProtectContents Then');
+    lines.push('        MsgBox "工作表「' + String(sheetName).replace(/"/g, '""') + '」有保护，写不进去。" & vbCrLf & _');
+    lines.push('            "请先在「审阅」→「撤销工作表保护」里解开，再跑一次。", vbExclamation');
+    lines.push('        Exit Sub');
+    lines.push('    End If');
     if (opts.backup !== false) {
-      lines.push("    ' 先备份一份，填错了还能退回来");
-      lines.push('    ThisWorkbook.SaveCopyAs ThisWorkbook.Path & "\\" & ThisWorkbook.Name & ".bak.xlsx"');
+      lines.push("    ' 先备份一份，填错了还能退回来（没保存过的新文件没有路径，跳过）");
+      lines.push('    If ThisWorkbook.Path <> "" Then');
+      lines.push('        On Error Resume Next');
+      lines.push('        ThisWorkbook.SaveCopyAs ThisWorkbook.Path & "\\" & _');
+      lines.push('            Left$(ThisWorkbook.Name, InStrRev(ThisWorkbook.Name, ".") - 1) & "_填充前备份.xlsx"');
+      lines.push('        On Error GoTo Fail');
+      lines.push('    End If');
     }
     if (willInsert) {
       // 把最后一行明细整行复制下来插入：格式和公式都跟着，相对引用自动顺延
@@ -474,6 +493,7 @@
       lines.push('    Dim totalChanges As New Collection, change As Variant, expandTotals As Boolean');
       lines.push('    expandTotals = ConfirmTotalExpansion(ws, ' + src + ', ' + missing + ', totalChanges)');
       lines.push("    ' 空行不够：照第 " + src + " 行复制 " + missing + ' 行，公式会跟着往下走');
+      lines.push('    On Error GoTo InsertFail');
       lines.push('    Application.ScreenUpdating = False');
       lines.push('    ws.Rows(' + src + ').Copy');
       // 插在最后一行空行的位置上（不是它下面）：
@@ -481,6 +501,7 @@
       lines.push('    ws.Rows("' + src + ':' + (src + missing - 1) + '").Insert Shift:=xlDown');
       lines.push('    Application.CutCopyMode = False');
       lines.push('    Application.ScreenUpdating = True');
+      lines.push('    On Error GoTo Fail');
     }
     var guards = [], writes = [];
     for (var i = 0; i < plan.length; i++) {
@@ -521,6 +542,25 @@
     lines.push('    Exit Sub');
     lines.push('MergeFound:');
     lines.push('    MsgBox "目标格是合并单元格的一部分，写进去会被 Excel 丢掉，已停止。"');
+    lines.push('    Exit Sub');
+    // 任何没预料到的错误（多半是 1004）都给一句人话，不要弹「应用程序定义或对象定义错误」
+    lines.push('InsertFail:');
+    lines.push('    On Error Resume Next');
+    lines.push('    Application.CutCopyMode = False');
+    lines.push('    Application.ScreenUpdating = True');
+    lines.push('    MsgBox "插第 ' + (insertAfter + 2) + ' 行时失败了，没有写入任何单元格。" & vbCrLf & vbCrLf & _');
+    lines.push('        "最常见的原因是这一行的合并单元格跨到了下面一行——" & vbCrLf & _');
+    lines.push('        "先手工在明细区插入 ' + missing + ' 行，再跑一次这个宏（行数够了就不会再插）。", vbCritical');
+    lines.push('    Exit Sub');
+    lines.push('Fail:');
+    lines.push('    Application.ScreenUpdating = True');
+    lines.push('    Application.CutCopyMode = False');
+    lines.push('    MsgBox "宏跑到一半出错了：" & Err.Number & " " & Err.Description & vbCrLf & vbCrLf & _');
+    lines.push('        "常见原因：" & vbCrLf & _');
+    lines.push('        "· 工作表被保护——先撤销保护" & vbCrLf & _');
+    lines.push('        "· 宏跑在了别的工作簿上——要在底稿那个工作簿里跑" & vbCrLf & _');
+    lines.push('        "· 目标行被隐藏或合并且公式要求整行插入" & vbCrLf & vbCrLf & _');
+    lines.push('        "已写入的单元格不会自动撤回，可用同目录的「_填充前备份.xlsx」恢复。", vbCritical');
     lines.push('End Sub');
     if (willInsert) {
       lines.push('',
