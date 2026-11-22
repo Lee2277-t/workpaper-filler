@@ -291,7 +291,7 @@
     if (!state.error && state.detail && state.tplWb) {
       lines.push('<div class="note">明细表「' + esc(state.sheetName) + '」：表头第 ' + (state.detail.headerRow + 1) +
         ' 行，可填空行 ' + state.blanks.length + ' 行（从第 ' + ((state.blanks[0] || 0) + 1) + ' 行起）。' +
-        '公式格一律不碰。</div>');
+        '填数时跳过公式格。</div>');
     }
     if (!state.tplWb) lines.push('<div class="note">先选底稿模板（带公式的那个 xlsx）。</div>');
     else if (!state.sheetName) lines.push('<div class="note bad">这个底稿里没找到明细表（表头要有「项目名称 / 本期借方 / 本期贷方」）。</div>');
@@ -322,8 +322,8 @@
     download(new Blob([vba], { type: 'text/plain;charset=utf-8' }),
       '填充宏_' + state.sheetName + '.bas');
     $('genInfo').textContent = (state.missing || 0) > 0
-      ? '已生成宏：会先照最后一行复制插入 ' + state.missing + ' 行（公式跟着往下走），再填数。' +
-        'Alt+F11 → 插入模块 → 粘贴 → F5。跑完请看一眼合计行有没有把新行算进去。'
+      ? '已生成宏：会照最后一行复制插入 ' + state.missing + ' 行并填数。' +
+        '发现可扩展的合计范围时，会先询问是否把新行计入。Alt+F11 → 插入模块 → 粘贴 → F5。'
       : '已生成宏：在 Excel 里 Alt+F11 → 插入模块 → 粘贴 → F5。公式不会被改动。';
   }
 

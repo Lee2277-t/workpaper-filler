@@ -396,7 +396,7 @@
     if (missing > 0) {
       problems.push('客户有 ' + parties.length + ' 户，明细表只有 ' + blanks.length + ' 个空行，' +
         '要往下补 ' + missing + ' 行。用「下载填充宏」会自动插：照第 ' + (lastBlank + 1) +
-        ' 行复制，公式跟着往下走；「直接生成 xlsx」不支持插行，这种情况请用宏。');
+        ' 行复制，发现合计范围漏掉新行时会询问；「直接生成 xlsx」不支持插行，这种情况请用宏。');
     }
     return { plan: plan, problems: problems, missing: missing, insertAfter: lastBlank };
   }
@@ -421,15 +421,16 @@
     return escaped.join(' & Chr(10) & ');
   }
 
-  /** 生成 VBA：只写计划里的格，绝不碰公式；不够的行自动插，公式跟着复制 */
+  /** 生成 VBA：填充计划格，插行时经用户确认才扩展合计公式 */
   function buildVBA(plan, sheetName, opts) {
     opts = opts || {};
     var lines = [];
     var missing = opts.missing || 0;
     var insertAfter = opts.insertAfter;      // 0 基；插在它下面
+    var willInsert = missing > 0 && insertAfter >= 0;
     lines.push("' 底稿填充助手 生成");
     lines.push("' 用法：Excel 里 Alt+F11 → 插入 → 模块 → 粘贴本段 → F5");
-    lines.push("' 只写下面这些格，公式和其他内容一律不动");
+    lines.push(willInsert ? "' 填写计划格，扩展合计公式前先询问" : "' 只写下面这些格，公式和其他内容一律不动");
     lines.push('Sub 填充底稿明细()');
     lines.push('    Dim ws As Worksheet');
     lines.push('    Set ws = ThisWorkbook.Worksheets("' + String(sheetName).replace(/"/g, '""') + '")');
@@ -437,13 +438,17 @@
       lines.push("    ' 先备份一份，填错了还能退回来");
       lines.push('    ThisWorkbook.SaveCopyAs ThisWorkbook.Path & "\\" & ThisWorkbook.Name & ".bak.xlsx"');
     }
-    if (missing > 0 && insertAfter >= 0) {
+    if (willInsert) {
       // 把最后一行明细整行复制下来插入：格式和公式都跟着，相对引用自动顺延
       var src = insertAfter + 1;               // Excel 行号
+      lines.push('    Dim totalChanges As New Collection, change As Variant, expandTotals As Boolean');
+      lines.push('    expandTotals = ConfirmTotalExpansion(ws, ' + src + ', ' + missing + ', totalChanges)');
       lines.push("    ' 空行不够：照第 " + src + " 行复制 " + missing + ' 行，公式会跟着往下走');
       lines.push('    Application.ScreenUpdating = False');
       lines.push('    ws.Rows(' + src + ').Copy');
-      lines.push('    ws.Rows(' + (src + 1) + ':' + (src + missing) + ').Insert Shift:=xlDown');
+      // 插在最后一行空行的位置上（不是它下面）：
+      // 插入点落在合计公式的引用范围之内，Excel 会自动把范围撑开，公式不用改
+      lines.push('    ws.Rows("' + src + ':' + (src + missing - 1) + '").Insert Shift:=xlDown');
       lines.push('    Application.CutCopyMode = False');
       lines.push('    Application.ScreenUpdating = True');
     }
@@ -463,8 +468,23 @@
     }
     lines = lines.concat(guards);
     lines = lines.concat(writes);
-    lines.push('    MsgBox "已填入 ' + plan.length + ' 户' + (missing > 0 ? '，并补了 ' + missing + ' 行' : '') +
-      '。公式未改动，请核对合计行是否已把新行算进去。"');
+    if (willInsert) {
+      lines.push('    Dim result As String');
+      lines.push('    result = "已填入 ' + plan.length + ' 户，并插入 ' + missing + ' 行。"');
+      lines.push('    If expandTotals Then');
+      lines.push('        For Each change In totalChanges');
+      lines.push('            ws.Cells(change(0), change(1)).Formula = change(2)');
+      lines.push('        Next change');
+      lines.push('        result = result & "已扩展 " & totalChanges.Count & " 个合计公式，所选合计已包含新增行。"');
+      lines.push('    ElseIf totalChanges.Count > 0 Then');
+      lines.push('        result = result & "未扩展 " & totalChanges.Count & " 个合计公式。这些合计漏计新增行，需要核对。"');
+      lines.push('    Else');
+      lines.push('        result = result & "未发现可扩展的单列 SUM，未手动改写合计公式。"');
+      lines.push('    End If');
+      lines.push('    MsgBox result & vbCrLf & "请核对其他合计公式是否包含新增行。"');
+    } else {
+      lines.push('    MsgBox "已填入 ' + plan.length + ' 户。公式未改动。"');
+    }
     lines.push('    Exit Sub');
     lines.push('FormulaFound:');
     lines.push('    MsgBox "目标格包含公式，已停止，没有写入任何单元格。"');
@@ -472,6 +492,41 @@
     lines.push('MergeFound:');
     lines.push('    MsgBox "目标格是合并单元格的一部分，写进去会被 Excel 丢掉，已停止。"');
     lines.push('End Sub');
+    if (willInsert) {
+      lines.push('',
+        'Private Function ConfirmTotalExpansion(ws As Worksheet, ByVal lastDetailRow As Long, ByVal insertedRows As Long, changes As Collection) As Boolean',
+        '    Dim formulas As Range, cell As Range, sumRange As Range',
+        '    Dim formula As String, refText As String, address As String, proposed As String, examples As String',
+        '    On Error Resume Next',
+        '    Set formulas = ws.UsedRange.SpecialCells(xlCellTypeFormulas)',
+        '    On Error GoTo 0',
+        '    If formulas Is Nothing Then Exit Function',
+        '    For Each cell In formulas.Cells',
+        '        If cell.Row <= lastDetailRow Or cell.HasArray Then GoTo NextFormula',
+        '        formula = cell.Formula',
+        '        If Left$(UCase$(formula), 5) <> "=SUM(" Or Right$(formula, 1) <> ")" Then GoTo NextFormula',
+        '        refText = Replace(Mid$(formula, 6, Len(formula) - 6), " ", "")',
+        '        Set sumRange = Nothing',
+        '        On Error Resume Next',
+        '        Set sumRange = ws.Range(refText)',
+        '        On Error GoTo 0',
+        '        If sumRange Is Nothing Then GoTo NextFormula',
+        '        address = sumRange.Address(False, False)',
+        '        If address <> Replace(refText, "$", "") And address & ":" & address <> Replace(refText, "$", "") Then GoTo NextFormula',
+        '        If sumRange.Columns.Count <> 1 Then GoTo NextFormula',
+        '        If sumRange.Row + sumRange.Rows.Count - 1 >= lastDetailRow Then GoTo NextFormula',
+        '        If InStr(refText, ":") = 0 Then refText = refText & ":" & refText',
+        '        proposed = "=SUM(" & Left$(refText, Len(refText) - Len(CStr(lastDetailRow))) & (lastDetailRow + insertedRows) & ")"',
+        '        changes.Add Array(cell.Row + insertedRows, cell.Column, proposed)',
+        '        If changes.Count <= 3 Then examples = examples & vbCrLf & cell.Address(False, False) & "（插行前） " & formula & " → " & proposed',
+        'NextFormula:',
+        '    Next cell',
+        '    If changes.Count = 0 Then Exit Function',
+        '    If changes.Count > 3 Then examples = examples & vbCrLf & "其余 " & (changes.Count - 3) & " 个合计公式同样扩至新增行末尾。"',
+        '    ConfirmTotalExpansion = (MsgBox(changes.Count & " 个合计公式将漏掉新增的 " & insertedRows & " 行。" & examples & vbCrLf & _',
+        '        "是否扩展这些合计范围？选否将照常插行并填数，保留这些公式的原范围。", vbYesNo + vbDefaultButton2 + vbExclamation, "合计范围确认") = vbYes)',
+        'End Function');
+    }
     return lines.join('\r\n');
   }
 
