@@ -266,13 +266,18 @@
     }
     var html = '';
     state.plan.forEach(function (p, i) {
-      var open = 0, debit = 0, credit = 0, close = 0;
+      var open = 0, debit = 0, credit = 0, close = null;
       p.cells.forEach(function (c) {
         if (c.col === state.detail.cols.open) open = c.value;
         if (c.col === state.detail.cols.debit) debit = c.value;
         if (c.col === state.detail.cols.credit) credit = c.value;
         if (c.col === state.detail.cols.close) close = c.value;
       });
+      // 期末列是公式时我们不写它，也就不该在预览里替它算一个数——
+      // 往来科目有借有贷，算错了反而误导
+      var closeCell = close === null
+        ? '<span class="byFormula">公式算</span>'
+        : num(close);
       html += '<tr>' +
         '<td>' + (i + 1) + '</td>' +
         '<td>' + (p.row + 1) + '</td>' +
@@ -280,7 +285,7 @@
         '<td class="num">' + num(open) + '</td>' +
         '<td class="num">' + num(debit) + '</td>' +
         '<td class="num">' + num(credit) + '</td>' +
-        '<td class="num">' + num(close) + '</td>' +
+        '<td class="num">' + closeCell + '</td>' +
         '</tr>';
     });
     box.innerHTML = html;

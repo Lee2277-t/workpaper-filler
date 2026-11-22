@@ -33,3 +33,5 @@ th, td { padding: 6px 9px; border-bottom: 1px solid var(--line); text-align: lef
 th { background: #fafbfc; font-weight: 600; color: var(--muted); }
 td.num { text-align: right; font-variant-numeric: tabular-nums; }
 footer { max-width: 1080px; margin: 0 auto; padding: 0 24px 40px; color: var(--muted); font-size: 12.5px; }
+
+.byFormula { color: #6b7280; font-size: 12.5px; }
