@@ -144,6 +144,41 @@ console.log('\n[期初]');
   ok(partial.problems.join('').indexOf('没给数') >= 0, '缺期初的户会提示');
 }
 
+
+console.log('\n[分组边界 / 空行]');
+{
+  const det2 = { cols: { no: 0, name: 1, open: 2, debit: 3, credit: 4, close: 5 }, headerRow: 1, groupRow: 1 };
+  const grid = [
+    ['序号', '项目名称', '期初金额', '本期借方', '本期贷方', '期末金额'],
+    [1, '', null, null, null, null],
+    ['', '本项目小计', 1, 2, 3, 4],
+    ['', '二、非关联方', null, null, null, null],
+    [2, '', null, null, null, null],
+    [3, '', null, null, null, null],
+    ['', '合计', null, null, null, null]
+  ];
+  const gs = Core.listGroups(grid, det2, () => false);
+  const g2 = gs.filter(g => g.title === '二、非关联方')[0];
+  ok(!!g2, '认出第二个分组');
+  eq(g2.blanks.map(r => r + 1).join(','), '5,6', '二组前面有「小计」也照样能扫到空行');
+
+  // 合计写在 A 列（不在项目名称列）也要截断
+  const grid2 = [
+    ['序号', '项目名称', '期初金额', '本期借方', '本期贷方', '期末金额'],
+    [1, '', null, null, null, null],
+    ['合计', '', null, null, null, null],
+    ['', '', null, null, null, null]
+  ];
+  const det2b = Object.assign({}, det2, { headerRow: 0, groupRow: 0 });
+  const b2 = Core.findBlankRows(grid2, det2b, () => false);
+  eq(b2.map(r => r + 1).join(','), '2', '合计在 A 列也能截断，不会把账龄区当空行');
+
+  // 0 个空行不推算行号
+  const zero = Core.planWrites([{ party: '甲', debit: 100, credit: 0 }], [], det2, {});
+  eq(zero.plan.length, 0, '0 空行时不出计划');
+  ok(zero.problems.join('').indexOf('没有可填的空行') >= 0, '0 空行时说清楚要先插行');
+}
+
 console.log('\n[生成宏]');
 const vba = Core.buildVBA(res.plan, '预收款项明细表', { backup: false });
 ok(vba.indexOf('Sub 填充底稿明细()') >= 0, '有 Sub 入口');

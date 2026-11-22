@@ -255,16 +255,30 @@
     return /^(合计|总计|共计|累计|合计数|合计金额)$/.test(v) || /(^|[^本页本表])(合计|总计)$/.test(v);
   }
 
+  /** 这一行是不是明细区的边界（合计/小计）。
+   *  合计不一定写在项目名称列，有时在 A 列，所以名称列为空时再看整行。 */
+  function isRowBoundary(row, detail, nameCell) {
+    if (isTotalLabel(nameCell)) return true;
+    if (nameCell) return false;
+    for (var c = 0; c < row.length; c++) {
+      if (c === detail.cols.name) continue;
+      if (isTotalLabel(str(row[c]).trim())) return true;
+    }
+    return false;
+  }
+
   function findBlankRows(rows, detail, isFormula, opts) {
     opts = opts || {};
     var out = [];
-    var start = detail.headerRow + 1;
+    // 从哪一行开始扫：第二个分组要跳过第一个分组的小计，
+    // 否则从表头扫起一碰见「小计」就 break，二组以后永远 0 个空行
+    var start = opts.startRow === undefined ? detail.headerRow + 1 : opts.startRow;
     var endRow = opts.endRow === undefined ? rows.length : opts.endRow;
     for (var r = start; r < endRow; r++) {
       var row = rows[r] || [];
       var nameCell = str(row[detail.cols.name]).trim();
       // 合计/小计行：这段明细到此结束，后面的空格是别的表
-      if (isTotalLabel(nameCell)) break;
+      if (isRowBoundary(row, detail, nameCell)) break;
       if ((opts.isHidden && opts.isHidden(r))) continue;   // 隐藏行不写，用户看不见
       if (/^[一二三四五六七八九十]+$/.test(nameCell)) continue;
       if (nameCell) continue;                       // 已经有内容，不覆盖
@@ -331,6 +345,7 @@
         startRow: from,
         endRow: to,
         blanks: findBlankRows(rows, detail, isFormula, {
+          startRow: from,
           endRow: to,
           isOccupied: opts.isOccupied,
           isMergedSubordinate: opts.isMergedSubordinate,
@@ -341,6 +356,7 @@
     // 表头下有行、但第一个分组标题之前也有空行：单独成组，排在最后，不抢默认
     if (marks.length && marks[0].row > start) {
       var headBlanks = findBlankRows(rows, detail, isFormula, {
+        startRow: start,
         endRow: marks[0].row,
         isOccupied: opts.isOccupied,
         isMergedSubordinate: opts.isMergedSubordinate
@@ -389,6 +405,11 @@
     var canWrite = opts.canWrite || function () { return true; };
     var isMergedSub = opts.isMergedSubordinate || function () { return false; };
     var plan = [], problems = [], missingOpen = [];
+    // 空行数为 0 时无法判断从哪一行开始续，硬算会把客户写进标题行/表头
+    if (!blanks.length) {
+      problems.push('这一组没有可填的空行。请先在底稿里给这一组插入几行空行，再重新生成。');
+      return { plan: [], problems: problems, missing: 0, insertAfter: -1 };
+    }
     // 空行不够不再拒绝：Excel 本来就该插行，插进去公式会跟着往下走。
     // 这里算出缺几行、从哪一行续，宏里负责插。
     var missing = Math.max(0, parties.length - blanks.length);
@@ -407,7 +428,9 @@
       var add = function (col, value, text) {
         if (col < 0) return;
         if (isMergedSub(row, col)) return;          // 合并区从属格写进去会丢
-        if (row <= lastBlank && !canWrite(row, col)) return;
+        // 新插的行是照最后一行复制的，公式也一起下来了：按模板行判断能不能写
+        var refRow = row <= lastBlank ? row : lastBlank;
+        if (!canWrite(refRow, col)) return;
         cells.push({ col: col, value: value, text: !!text });
       };
       add(detail.cols.name, p.party, true);
@@ -580,6 +603,7 @@
         'Private Function ConfirmTotalExpansion(ws As Worksheet, ByVal lastDetailRow As Long, ByVal insertedRows As Long, changes As Collection) As Boolean',
         '    Dim formulas As Range, cell As Range, sumRange As Range',
         '    Dim formula As String, refText As String, address As String, proposed As String, examples As String',
+        '    Dim startRef As String, endRef As String, parts() As String',
         '    On Error Resume Next',
         '    Set formulas = ws.UsedRange.SpecialCells(xlCellTypeFormulas)',
         '    On Error GoTo 0',
@@ -599,7 +623,11 @@
         '        If sumRange.Columns.Count <> 1 Then GoTo NextFormula',
         '        If sumRange.Row + sumRange.Rows.Count - 1 >= lastDetailRow Then GoTo NextFormula',
         '        If InStr(refText, ":") = 0 Then refText = refText & ":" & refText',
-        '        proposed = "=SUM(" & Left$(refText, Len(refText) - Len(CStr(lastDetailRow))) & (lastDetailRow + insertedRows) & ")"',
+        '        parts = Split(refText, ":")',
+        '        startRef = parts(0)',
+        '        endRef = parts(1)',
+        '        proposed = "=SUM(" & startRef & ":" & _',
+        '            ws.Range(endRef).Offset(insertedRows, 0).Address(False, False) & ")"',
         '        changes.Add Array(cell.Row + insertedRows, cell.Column, proposed)',
         '        If changes.Count <= 3 Then examples = examples & vbCrLf & cell.Address(False, False) & "（插行前） " & formula & " → " & proposed',
         'NextFormula:',
