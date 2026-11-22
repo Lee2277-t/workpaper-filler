@@ -242,6 +242,8 @@ runSuite('缺陷回归', {
     const rightIdx = vba.indexOf('If Right$(formula, 1) <> ")" Then GoTo NextFormula');
     check.ok(sumIdx >= 0 && rightIdx > sumIdx, '先判 SUM 再判右括号');
     check.match(vba, /Private plainTotals As Long/);
+    // 模块级变量在同一会话里会留着上次的值，跑宏前必须归零
+    check.match(vba, /Sub 填充底稿明细\(\)\r\n    plainTotals = 0/);
     // VBE 实测：模块级变量放在 End Sub 后面会报「在 End Sub 后面只能出现注释」
     const firstProc = vba.indexOf('Private Sub Say');
     check.ok(vba.indexOf('Private plainTotals As Long') < firstProc, '模块级变量必须写在过程之前');

@@ -8,7 +8,7 @@
 </head>
 <body>
 <header>
-  <h1>底稿填充助手 <span class="ver">v0.3.2</span></h1>
+  <h1>底稿填充助手 <span class="ver">v0.3.3</span></h1>
   <p class="sub">把序时账按客户汇总，填进底稿明细表的空格。<b>插行时，扩展合计范围前会询问确认。</b>文件只在本机浏览器里读，不上传。</p>
 </header>
 
@@ -58,6 +58,13 @@
       <button id="genXlsx" class="ghost" type="button" disabled>直接生成填好的 xlsx</button>
     </div>
     <p class="hint" id="genInfo"></p>
+    <details id="macroDetails" class="hidden">
+      <summary>看一眼将要粘贴的宏（前 20 行）</summary>
+      <pre id="macroPreview"></pre>
+      <p class="hint">如果 Excel 里模块的开头和这里不一样，说明那不是本工具生成的，
+      整段删掉重新粘贴即可。模块级变量（<code>Private xxx As ...</code>）必须都排在
+      <code>Sub</code> 之前，VBE 才不会报「End Sub 后面只能出现注释」。</p>
+    </details>
     <p class="hint"><b>为什么推荐宏</b>：宏只写目标单元格，底稿的格式、合并、批注、图表全都不动；
     直接生成 xlsx 会重写整个文件，格式可能变。</p>
   </section>

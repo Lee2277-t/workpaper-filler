@@ -152,25 +152,36 @@
    * 认不出公式就看科目代码：2 负债 / 3 权益 → -1
    */
   function inferCloseSign(ws, detail, subject) {
-    var col = detail.cols.close, dbt = detail.cols.debit;
+    var col = detail.cols.close, dbt = detail.cols.debit, crd = detail.cols.credit, opn = detail.cols.open;
     if (ws && col >= 0 && dbt >= 0) {
-      // 表头下面几行里，跳过 SUM 小计（那是合计不是方向），找到第一个方向公式
+      // 表头下面几行里，跳过合计/SUMIF 之类的汇总公式，找到第一个方向公式
       for (var k = 1; k <= 10; k++) {
         var cell = ws[XLSX.utils.encode_cell({ r: detail.headerRow + k, c: col })];
         if (!cell || !cell.f) continue;
         var f = String(cell.f).replace(/^=?\s*ROUND\s*\(/i, '').replace(/,\s*[-\d.]+\s*\)\s*$/i, '');
-        if (/^SUM\s*\(/i.test(f)) continue;
-        var re = /([+-]?)\s*\$?([A-Z]{1,3})\$?\d+/g, m, cbt = 0;
+        if (/^SUM(IF|IFS)?\s*\(/i.test(f)) continue;          // 汇总公式不是方向公式
+        var re = /([+-]?)\s*\$?([A-Z]{1,3})\$?(\d+)/g, m, cbt = 0, seen = [], ok = true;
         while ((m = re.exec(f))) {
-          if (XLSX.utils.decode_col(m[2]) !== dbt) continue;
-          cbt += m[1] === '-' ? -1 : 1;
+          var ci = XLSX.utils.decode_col(m[2]);
+          seen.push(ci);
+          if (ci === dbt) cbt += m[1] === '-' ? -1 : 1;
         }
-        if (cbt !== 0) return { sign: cbt > 0 ? 1 : -1, from: 'template' };
+        // 方向公式只该由 期初/借方/贷方 三格组成，各出现一次；
+        // =D4+D10、=D3+D4 这类跨行加总是合计，不是方向
+        var want = [opn, dbt, crd].filter(function (x) { return x >= 0; }).sort().join(',');
+        var got = seen.slice().sort().join(',');
+        if (seen.length !== 3 || got !== want) ok = false;
+        if (ok && cbt !== 0) return { sign: cbt > 0 ? 1 : -1, from: 'template' };
       }
     }
-    // 认不出公式：科目代码 2 负债 / 3 权益；再不然看科目名
+    // 认不出公式：按科目代码 1/5 借、2/4 贷；6 开头看名字；3 共同类不猜
     var s = String(subject || '').trim();
-    if (/^[23]/.test(s) || /预收|应付|应交|合同负债|递延收益|预计负债|短期借款|长期借款/.test(s)) {
+    var code = (s.match(/^\d+/) || [''])[0].charAt(0);
+    if (code === '1' || code === '5') return { sign: 1, from: 'code' };
+    if (code === '2' || code === '4') return { sign: -1, from: 'code' };
+    if (code === '6') return { sign: /收入|收益/.test(s) ? -1 : 1, from: 'code' };
+    if (code === '3') return { sign: 1, from: 'unknown' };     // 共同类，借贷都可能
+    if (/预收|应付|应交|合同负债|递延收益|预计负债|短期借款|长期借款|实收资本|盈余公积/.test(s)) {
       return { sign: -1, from: 'code' };
     }
     return { sign: 1, from: 'default' };
@@ -225,6 +236,15 @@
     state.groups = Core.listGroups(state.rows, state.detail, isF, {
       isOccupied: function (r, c) { return cellHasValue(ws, r, c) || inArray(ranges, r, c); },
       isMergedSubordinate: function (r, c) { return isMergedSubordinate(merges, r, c); },
+      mergeSpan: function (r, c) {
+        for (var i = 0; i < merges.length; i++) {
+          var m = merges[i];
+          if (r >= m.s.r && r <= m.e.r && c >= m.s.c && c <= m.e.c) {
+            return { top: m.s.r, bottom: m.e.r };
+          }
+        }
+        return null;
+      },
       isHidden: function (r) { var info = (ws["!rows"] || [])[r]; return !!(info && info.hidden); }
     });
 
@@ -290,11 +310,9 @@
     html += '<div class="stat"><span class="k">借方合计</span><span class="v">' + money(debit) + '</span></div>';
     html += '<div class="stat"><span class="k">贷方合计</span><span class="v">' + money(credit) + '</span></div>';
     var dir = state.closeSign === -1 ? '期初 − 借 + 贷' : '期初 + 借 − 贷';
-    var from = state.closeSignFrom === 'template' ? '照模板公式' : (state.closeSignFrom === 'code' ? '按科目性质' : '默认');
-    html += '<div class="stat"><span class="k">期末方向</span><span class="v">' + dir + '（' + from + '）</span></div>';
-    var dir = state.closeSign === -1 ? '期初 − 借 + 贷' : '期初 + 借 − 贷';
     var from = state.closeSignFrom === 'template' ? '照模板公式'
-      : (state.closeSignFrom === 'code' ? '按科目性质' : '默认');
+      : (state.closeSignFrom === 'code' ? '按科目性质'
+        : (state.closeSignFrom === 'unknown' ? '共同类，请自己核' : '默认'));
     html += '<div class="stat"><span class="k">期末方向</span><span class="v">' + dir +
       '（' + from + '）</span></div>';
     html += '<div class="stat"><span class="k">明细表空行</span><span class="v">' + state.blanks.length + ' 行</span></div>';
@@ -345,6 +363,7 @@
     var lines = [];
     if (state.error) lines.push('<div class="note bad">' + esc(state.error) + '</div>');
     state.problems.forEach(function (p) { lines.push('<div class="note warn">' + esc(p) + '</div>'); });
+    renderMacroPreview();
     if (!state.error && state.detail && state.tplWb) {
       lines.push('<div class="note">明细表「' + esc(state.sheetName) + '」：表头第 ' + (state.detail.headerRow + 1) +
         ' 行，可填空行 ' + state.blanks.length + ' 行（从第 ' + ((state.blanks[0] || 0) + 1) + ' 行起）。' +
@@ -374,11 +393,31 @@
 
   /* ---------------- 导出 ---------------- */
 
-  function exportVba() {
-    var vba = Core.buildVBA(state.plan, state.sheetName, {
+  function buildMacroText() {
+    if (!state.plan.length || !state.sheetName) return '';
+    return Core.buildVBA(state.plan, state.sheetName, {
       missing: state.missing || 0,
       insertAfter: state.insertAfter
     });
+  }
+
+  /**
+   * 把宏的开头几行显示出来。粘贴进 VBE 的如果和这里不一样，
+   * 说明模块里混了别的东西——这是用户唯一能自查的线索。
+   */
+  function renderMacroPreview() {
+    var box = $('macroDetails');
+    if (!box) return;
+    var text = buildMacroText();
+    if (!text) { box.classList.add('hidden'); return; }
+    var lines = text.split(/\r?\n/).slice(0, 20);
+    $('macroPreview').textContent = lines.join('\n') + '\n' +
+      '…（共 ' + text.split(/\r?\n/).length + ' 行）';
+    box.classList.remove('hidden');
+  }
+
+  function exportVba() {
+    var vba = buildMacroText();
     download(new Blob([vba], { type: 'text/plain;charset=utf-8' }),
       '填充宏_' + state.sheetName + '.bas');
     $('genInfo').textContent = (state.missing || 0) > 0
