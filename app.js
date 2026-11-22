@@ -256,6 +256,11 @@
       state.problems.push('往「' + group.title + '」这一组填（第 ' + (group.startRow + 1) + '–' + group.endRow +
         ' 行），一组填完不会串到下一组。要填别的组请在上面切换。');
     }
+    if (group && group.rest > 0 && group.blanks.length) {
+      state.problems.push('「' + group.title + '」的空行分在两段（中间有小计），本轮只填第 ' +
+        (group.blanks[0] + 1) + '–' + (group.blanks[group.blanks.length - 1] + 1) +
+        ' 行，共 ' + group.blanks.length + ' 行；填完再跑一次会填后面那 ' + group.rest + ' 行。');
+    }
     var opening = Core.parseOpening($('openBox') ? $('openBox').value : '');
     state.opening = opening.map;
     if (opening.bad.length) {
