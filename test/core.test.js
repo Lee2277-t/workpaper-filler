@@ -238,28 +238,35 @@ console.log('\n[纵向合并]');
 
 console.log('\n[小计当块标题]');
 {
-  // 真实底稿（应收账款明细表）的版式：小计在上、明细在下，
-  // 一组里还会再分几段，每段前面一个小计
+  // 真实底稿（应收账款明细表）的版式：小计在上、明细在下。
+  // 靠「小计的 SUM 指向下方还是上方」区分块标题与终结点。
   const d3 = { cols: { no: 0, name: 1, open: 2, debit: 3, credit: 4, close: 5 }, headerRow: 0 };
   const grid = [
     ['序号', '项目名称', '期初金额', '本期借方', '本期贷方', '期末金额'],
     ['', '一、关联方', null, null, null, null],
-    ['', '1、合并范围内小计', 1, 2, 3, 4],
+    ['', '1、合并范围内小计', null, null, null, null],
     [1, '', null, null, null, null],
     [2, '', null, null, null, null],
-    ['', '2、非合并范围内小计', 1, 2, 3, 4],
+    ['', '2、非合并范围内小计', null, null, null, null],
     [3, '', null, null, null, null],
-    [4, '', null, null, null, null],
     ['', '合计', null, null, null, null]
   ];
-  const gs = Core.listGroups(grid, d3, () => false);
-  const g = gs.filter(x => x.title.indexOf('关联方') >= 0)[0];
-  ok(!!g, '认出「一、关联方」');
-  eq(g.blanks.map(r => r + 1).join(','), '4,5', '小计在上也能扫到本段空行');
-  eq(g.rest, 2, '后面那一段还有 2 行，要告诉用户');
+  // 只有第 3、6 行是块标题（小计 SUM 指向下方）
+  const isBlockHeader = r => r === 2 || r === 5;
+  const gs = Core.listGroups(grid, d3, () => false, { isBlockHeader: isBlockHeader });
+  const seg1 = gs.filter(x => x.title.indexOf('合并范围内小计') >= 0)[0];
+  ok(!!seg1, '块标题自成一组');
+  eq(seg1.blanks.map(r => r + 1).join(','), '4,5', '块标题下面两行算本段空行');
+  const seg2 = gs.filter(x => x.title.indexOf('非合并范围内小计') >= 0)[0];
+  eq(seg2.blanks.map(r => r + 1).join(','), '7', '第二段也能单独选');
+
+  // 没有 isBlockHeader 时（只有 core，不知道公式）必须保守：小计就当中断
+  const plain = Core.listGroups(grid, d3, () => false);
+  const plainSeg = plain.filter(x => x.title.indexOf('合并范围内小计') >= 0)[0];
+  ok(!plainSeg, '没有公式信息时不猜块标题');
 }
 
-console.log('\n[生成宏]');
+console.log('\n[生成宏]');console.log('\n[生成宏]');
 const vba = Core.buildVBA(res.plan, '预收款项明细表', { backup: false });
 ok(vba.indexOf('Sub 填充底稿明细()') >= 0, '有 Sub 入口');
 ok(vba.indexOf('Worksheets("预收款项明细表")') >= 0, '指向正确的工作表');

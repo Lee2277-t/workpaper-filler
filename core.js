@@ -15,7 +15,7 @@
 })(typeof self !== 'undefined' ? self : this, function () {
   'use strict';
 
-  var VERSION = '0.3.5';
+  var VERSION = '0.3.6';
 
   /* ---------------- 基础 ---------------- */
 
@@ -276,31 +276,12 @@
     var endRow = opts.endRow === undefined ? rows.length : opts.endRow;
     var isOccupied = opts.isOccupied || function () { return false; };
     var isMerged = opts.isMergedSubordinate || function () { return false; };
-    /** 后面几行里有没有「像是给人填的空行」——用来区分「小计是块标题」还是「小计是终点」 */
-    var blankAhead = function (from, limit) {
-      for (var k = from; k < Math.min(limit, from + 3); k++) {
-        var rw = rows[k] || [];
-        if (str(rw[detail.cols.name]).trim()) continue;
-        if (isFormula(k, detail.cols.name) || isMerged(k, detail.cols.name)) continue;
-        // 只看有没有真值：模板里「期末金额」整列是公式，不算占用
-        var busy = false;
-        [detail.cols.open, detail.cols.debit, detail.cols.credit].forEach(function (cc) {
-          if (cc >= 0 && isOccupied(k, cc)) busy = true;
-        });
-        if (!busy) return true;
-      }
-      return false;
-    };
     for (var r = start; r < endRow; r++) {
       var row = rows[r] || [];
       var nameCell = str(row[detail.cols.name]).trim();
-      // 合计/小计行：可能是明细区终点，也可能是「1、合并范围内小计」这种块标题
-      if (isRowBoundary(row, detail, nameCell)) {
-        if (out.length) break;          // 已经收集到空行了 → 这一段到此为止
-        // 还没收集到，且小计下面紧跟着空行 → 说明小计是块标题，跳过继续
-        if (!isGrandTotal(nameCell) && blankAhead(r + 1, endRow)) continue;
-        break;
-      }
+      // 合计/小计行：这段明细到此结束。
+      // 「小计在上、明细在下」的块标题由 listGroups 当成独立分组，扫不到这里。
+      if (isRowBoundary(row, detail, nameCell)) break;
       if ((opts.isHidden && opts.isHidden(r))) continue;   // 隐藏行不写，用户看不见
       if (/^[一二三四五六七八九十]+$/.test(nameCell)) continue;
       if (nameCell) continue;                       // 已经有内容，不覆盖
@@ -342,6 +323,18 @@
       var nameCell = str(row[detail.cols.name]).trim();
       // 总合计：明细区到此为止
       if (isGrandTotal(nameCell) && grandRow < 0) { grandRow = r; break; }
+      // 块标题小计（SUM 指向下方）自成一段：1、合并范围内小计 / 2、非合并范围内小计
+      if (opts.isBlockHeader && opts.isBlockHeader(r)) {
+        var label = nameCell;
+        if (!label) {
+          for (var bc = 0; bc < row.length; bc++) {
+            var bv = str(row[bc]).trim();
+            if (bv && isTotalLabel(bv)) { label = bv; break; }
+          }
+        }
+        marks.push({ row: r, title: label || ('第 ' + (r + 1) + ' 行小计') });
+        continue;
+      }
       if (isTotalLabel(nameCell)) continue;          // 组内小计：是边界，不是终点
       // 标题可能合并进 A 列（A:B / A:F），此时名称列是空从属格，要看整行
       var titleText = nameCell;
@@ -384,17 +377,6 @@
           isHidden: opts.isHidden
         }).filter(function (rr) { return rr >= from; })
       });
-      // 小计后面可能还有空行：本轮只填第一段，告诉用户后面还有多少
-      var lastB = out[out.length - 1].blanks;
-      if (lastB.length) {
-        out[out.length - 1].rest = findBlankRows(rows, detail, isFormula, {
-          startRow: lastB[lastB.length - 1] + 1,
-          endRow: to,
-          isOccupied: opts.isOccupied,
-          isMergedSubordinate: opts.isMergedSubordinate,
-          isHidden: opts.isHidden
-        }).length;
-      }
     }
     // 表头下有行、但第一个分组标题之前也有空行：单独成组，排在最后，不抢默认
     if (marks.length && marks[0].row > start) {

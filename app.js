@@ -239,7 +239,39 @@
     var isF = formulaChecker(ws);
     var ranges = arrayRanges(ws);
     var merges = mergeRanges(ws);
+    // 块标题：这一行的小计 SUM 指向**下方**（如 1、合并范围内小计 =SUM(H8:H11)），
+    // 那是「一段的抬头」；指向**上方**的是终结点（如 合计 =SUM(H3:H5)）
+    var blockHeaderCache = {};
+    var isBlockHeader = function (r) {
+      if (blockHeaderCache[r] !== undefined) return blockHeaderCache[r];
+      blockHeaderCache[r] = false;
+      var row = state.rows[r] || [];
+      // 「————」这类占位格会排在名称前面，所以要整行找带合计/小计字样的格子
+      var hasLabel = false;
+      for (var c1 = 0; c1 < row.length; c1++) {
+        var v = row[c1];
+        if (v === null || v === undefined) continue;
+        var t = String(v).trim();
+        if (t && /合计|小计|总计|共计|累计/.test(t.replace(/[\s（）()：:]/g, ''))) { hasLabel = true; break; }
+      }
+      if (!hasLabel) return false;
+      var below = false;
+      ['open', 'debit', 'credit', 'close', 'no'].forEach(function (k) {
+        var c = state.detail.cols[k];
+        if (c === undefined || c < 0) return;
+        var cell = ws[XLSX.utils.encode_cell({ r: r, c: c })];
+        if (!cell || !cell.f) return;
+        var m = String(cell.f).match(/SUM\(\s*([A-Z]+\d+)\s*:/i);
+        if (m) {
+          var s0 = XLSX.utils.decode_cell(m[1]);
+          if (s0.r > r) below = true;
+        }
+      });
+      blockHeaderCache[r] = below;
+      return below;
+    };
     state.groups = Core.listGroups(state.rows, state.detail, isF, {
+      isBlockHeader: isBlockHeader,
       isOccupied: function (r, c) { return cellHasValue(ws, r, c) || inArray(ranges, r, c); },
       isMergedSubordinate: function (r, c) { return isMergedSubordinate(merges, r, c); },
       isHidden: function (r) { var info = (ws["!rows"] || [])[r]; return !!(info && info.hidden); }
@@ -255,11 +287,6 @@
     if (group && group.title && group.title !== '（未分组）') {
       state.problems.push('往「' + group.title + '」这一组填（第 ' + (group.startRow + 1) + '–' + group.endRow +
         ' 行），一组填完不会串到下一组。要填别的组请在上面切换。');
-    }
-    if (group && group.rest > 0 && group.blanks.length) {
-      state.problems.push('「' + group.title + '」的空行分在两段（中间有小计），本轮只填第 ' +
-        (group.blanks[0] + 1) + '–' + (group.blanks[group.blanks.length - 1] + 1) +
-        ' 行，共 ' + group.blanks.length + ' 行；填完再跑一次会填后面那 ' + group.rest + ' 行。');
     }
     var opening = Core.parseOpening($('openBox') ? $('openBox').value : '');
     state.opening = opening.map;
