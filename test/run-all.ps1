@@ -23,13 +23,21 @@ $failed = @()
 
 foreach ($s in $suites) {
     $file = Join-Path $here "$s.test.js"
-    $out = & $node $file 2>&1
+    $out = & {
+        # Windows PowerShell turns redirected stderr into error records.
+        $ErrorActionPreference = "Continue"
+        $PSNativeCommandUseErrorActionPreference = $false
+        & $node $file 2>&1
+    }
     $code = $LASTEXITCODE
     $line = ($out | Where-Object { $_ -match "全部通过|失败 |跳过" }) -join " "
     if ($code -ne 0) {
         $failed += $s
         Write-Host ("  {0,-10} 失败" -f $s) -ForegroundColor Red
-        $out | Where-Object { $_ -match "^\s+\d+\." } | ForEach-Object { Write-Host "    $_" }
+        $out | ForEach-Object {
+            $message = if ($_ -is [System.Management.Automation.ErrorRecord]) { $_.Exception.Message } else { $_ }
+            Write-Host "    $message"
+        }
     } else {
         if ($line -match "(\d+) 项断言") { $total += [int]$Matches[1] }
         Write-Host ("  {0,-10} {1}" -f $s, $line)

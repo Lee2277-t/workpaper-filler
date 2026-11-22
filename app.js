@@ -23,14 +23,38 @@
 
   function sheetRows(wb, name) {
     var ws = wb.Sheets[name];
-    if (!ws) return [];
-    return XLSX.utils.sheet_to_json(ws, { header: 1, raw: true, defval: null, blankrows: true });
+    if (!ws || !ws['!ref']) return { rows: [], firstRow: 0 };
+    var range = XLSX.utils.decode_range(ws['!ref']);
+    // 输出使用实际工作表坐标，表头搜索仍从表的有效范围开始。
+    range.s.c = 0;
+    var rows = XLSX.utils.sheet_to_json(ws, { header: 1, range: range, raw: true, defval: null, blankrows: true });
+    return { rows: new Array(range.s.r).concat(rows), firstRow: range.s.r };
   }
-  function isFormula(wb, name, r, c) {
-    var ws = wb.Sheets[name];
-    if (!ws) return false;
-    var cell = ws[XLSX.utils.encode_cell({ r: r, c: c })];
-    return !!(cell && cell.f);
+  function arrayRanges(ws) {
+    return Object.keys(ws).filter(function (addr) {
+      return ws[addr].f && ws[addr].F;
+    }).map(function (addr) { return XLSX.utils.decode_range(ws[addr].F); });
+  }
+  function inArray(ranges, r, c) {
+    return ranges.some(function (rg) {
+      return r >= rg.s.r && r <= rg.e.r && c >= rg.s.c && c <= rg.e.c;
+    });
+  }
+
+  function formulaChecker(ws) {
+    var arrays = Object.keys(ws).filter(function (addr) {
+      return ws[addr].f && ws[addr].F;
+    }).map(function (addr) {
+      return XLSX.utils.decode_range(ws[addr].F);
+    });
+    return function (r, c) {
+      var cell = ws[XLSX.utils.encode_cell({ r: r, c: c })];
+      if (cell && (cell.f || cell.F)) return true;
+      // Some members of an array formula have no stored cell of their own.
+      return arrays.some(function (range) {
+        return r >= range.s.r && r <= range.e.r && c >= range.s.c && c <= range.e.c;
+      });
+    };
   }
   function decodeCsv(buf) {
     var u8 = new Uint8Array(buf);
@@ -59,12 +83,30 @@
 
   /* ---------------- 底稿 ---------------- */
 
-  function listDetailSheets(wb) {
+  /** 这一格已经有金额了（不是公式、也不是空） */
+  function cellHasValue(ws, r, c) {
+    var cell = ws[XLSX.utils.encode_cell({ r: r, c: c })];
+    if (!cell || cell.f || cell.F) return false;
+    return cell.v !== undefined && cell.v !== null && cell.v !== '';
+  }
+  function rowOccupied(ws, ranges, r, detail) {
+    return [detail.cols.open, detail.cols.debit, detail.cols.credit, detail.cols.close].some(function (c) {
+      return c >= 0 && (cellHasValue(ws, r, c) || inArray(ranges, r, c));
+    });
+  }
+  function useRowHasValue_REMOVE(ws, r, detail) {
+    return [detail.cols.open, detail.cols.debit, detail.cols.credit, detail.cols.close].some(function (c) {
+      return c >= 0 && cellHasValue(ws, r, c);
+    });
+  }
+
+  function listDetailSheets(wb, problems) {
     var out = [];
     wb.SheetNames.forEach(function (name) {
-      var rows = sheetRows(wb, name);
-      var det = Core.detectDetail(rows);
-      if (det.usable) out.push({ name: name, det: det, rows: rows });
+      var grid = sheetRows(wb, name);
+      var det = Core.detectDetail(grid.rows, grid.firstRow);
+      if (det.usable) out.push({ name: name, det: det, rows: grid.rows });
+      if (det.error && problems) problems.push('「' + name + '」' + det.error);
     });
     return out;
   }
@@ -74,10 +116,10 @@
   function pickJournalSheet(wb) {
     var best = null;
     wb.SheetNames.forEach(function (name) {
-      var rows = sheetRows(wb, name);
-      var jh = Core.detectJournal(rows);
+      var grid = sheetRows(wb, name);
+      var jh = Core.detectJournal(grid.rows, grid.firstRow);
       if (!jh) return;
-      var parsed = Core.readJournal(rows, jh);
+      var parsed = Core.readJournal(grid.rows, jh);
       var withParty = parsed.records.filter(function (r) { return r.party; }).length;
       if (!best || withParty > best.withParty) {
         best = { name: name, header: jh, parsed: parsed, withParty: withParty };
@@ -92,6 +134,8 @@
     state.error = '';
     state.problems = [];
     state.plan = [];
+    state.parties = [];
+    state.blanks = [];
     if (!state.tplWb || !state.detail) {
       renderAll();
       return;
@@ -114,25 +158,62 @@
       return;
     }
     state.journal = js;
+    var issue = Core.findJournalAmountIssue(js.parsed.records, subject);
+    if (issue) {
+      state.error = '序时账「' + js.name + '」' + issue.amountError + '，请核对后重新上传。';
+      renderAll();
+      return;
+    }
     var parties = Core.summarizeByParty(js.parsed.records, subject);
     if (!parties.length) {
       state.error = '科目「' + subject + '」在序时账里没有带客户档案的记录。' +
         '如果是这个科目本来就没有往来明细，那是正常的；否则请确认科目代码填对了。';
-      state.parties = [];
       renderAll();
       return;
     }
     state.parties = parties;
-    state.blanks = Core.findBlankRows(state.rows, state.detail, function (r, c) {
-      return isFormula(state.tplWb, state.sheetName, r, c);
+    var ws = state.tplWb.Sheets[state.sheetName];
+    var isF = formulaChecker(ws);
+    var ranges = arrayRanges(ws);
+    state.groups = Core.listGroups(state.rows, state.detail, isF, {
+      isOccupied: function (r, c) { return cellHasValue(ws, r, c) || inArray(ranges, r, c); }
     });
-    var res = Core.planWrites(parties, state.blanks, state.detail, {});
+
+    var gi = Number($('groupSel').value || 0);
+    if (!state.groups[gi]) gi = 0;
+    state.groupIndex = gi;
+    var group = state.groups[gi];
+    state.blanks = (group ? group.blanks : []).filter(function (r) {
+      return !rowOccupied(ws, ranges, r, state.detail);
+    });
+    if (group && group.title && group.title !== '（未分组）') {
+      state.problems.push('往「' + group.title + '」这一组填（第 ' + (group.startRow + 1) + '–' + group.endRow +
+        ' 行），一组填完不会串到下一组。要填别的组请在上面切换。');
+    }
+    var res = Core.planWrites(parties, state.blanks, state.detail, {
+      canWrite: function (r, c) { return !isF(r, c); }
+    });
     state.plan = res.plan;
-    state.problems = res.problems;
+    state.problems = state.problems.concat(res.problems);
     renderAll();
   }
 
   /* ---------------- 渲染 ---------------- */
+
+  function renderGroups() {
+    var sel = $('groupSel');
+    if (!sel) return;
+    var groups = state.groups || [];
+    sel.innerHTML = '';
+    groups.forEach(function (g, i) {
+      var opt = document.createElement('option');
+      opt.value = String(i);
+      opt.textContent = g.title + '（空 ' + g.blanks.length + ' 行）';
+      sel.appendChild(opt);
+    });
+    sel.value = String(state.groupIndex || 0);
+    sel.disabled = groups.length <= 1;
+  }
 
   function renderStats() {
     if (!state.parties.length) { $('statBox').innerHTML = ''; return; }
@@ -149,7 +230,11 @@
 
   function renderPlan() {
     var box = $('planBody');
-    if (!state.plan.length) { box.innerHTML = ''; return; }
+    if (!state.plan.length) {
+      box.innerHTML = '';
+      $('planPanel').classList.add('hidden');
+      return;
+    }
     var html = '';
     state.plan.forEach(function (p, i) {
       var open = 0, debit = 0, credit = 0, close = 0;
@@ -190,6 +275,7 @@
     if (!state.tplWb) lines.push('<div class="note">先选底稿模板（带公式的那个 xlsx）。</div>');
     else if (!state.sheetName) lines.push('<div class="note bad">这个底稿里没找到明细表（表头要有「项目名称 / 本期借方 / 本期贷方」）。</div>');
     info.innerHTML = lines.join('');
+    renderGroups();
     renderStats();
     renderPlan();
     refreshButtons();
@@ -219,14 +305,16 @@
   }
 
   function exportXlsx() {
-    var wb = state.tplWb;
-    var ws = wb.Sheets[state.sheetName];
+    var sheets = Object.assign({}, state.tplWb.Sheets);
+    var wb = Object.assign({}, state.tplWb, { Sheets: sheets });
+    // 每次从原模板生成，避免上一次导出留下的客户进入新文件。
+    var ws = sheets[state.sheetName] = Object.assign({}, sheets[state.sheetName]);
+    var isFormula = formulaChecker(ws);
     // 只写计划里的格；公式格已经在 planWrites 阶段排除
     state.plan.forEach(function (item) {
       item.cells.forEach(function (c) {
         var addr = XLSX.utils.encode_cell({ r: item.row, c: c.col });
-        var old = ws[addr];
-        if (old && old.f) return;                      // 双保险：公式格绝不覆盖
+        if (isFormula(item.row, c.col)) return;        // 双保险：公式格绝不覆盖
         ws[addr] = c.text
           ? { t: 's', v: String(c.value) }
           : { t: 'n', v: Number(c.value) };
@@ -259,8 +347,10 @@
         if (!res.ok) { state.error = '底稿读不了：' + res.error; renderAll(); return; }
         state.tplWb = res.wb;
         state.tplName = res.fileName;
-        var list = listDetailSheets(res.wb);
-        $('tplInfo').textContent = f.name + '（' + res.wb.SheetNames.length + ' 张表，认出 ' + list.length + ' 张明细表）';
+        var problems = [];
+        var list = listDetailSheets(res.wb, problems);
+        $('tplInfo').textContent = f.name + '（' + res.wb.SheetNames.length + ' 张表，认出 ' + list.length + ' 张明细表）' +
+          (problems.length ? '。' + problems.join('；') : '');
         var sel = $('sheetSel');
         sel.innerHTML = '';
         list.forEach(function (s) {
@@ -306,6 +396,7 @@
       recompute();
     });
 
+    $('groupSel').addEventListener('change', function () { if (state.tplWb) recompute(); });
     $('subject').addEventListener('input', function () { if (state.tplWb) recompute(); });
     $('genVba').addEventListener('click', exportVba);
     $('genCsv').addEventListener('click', exportCsv);

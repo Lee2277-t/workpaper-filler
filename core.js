@@ -53,10 +53,11 @@
   var J_SUMMARY = /摘要|说明|事由/;
 
   /** 找序时账表头（表头可能在第 2-5 行，前面有标题行） */
-  function detectJournal(rows) {
+  function detectJournal(rows, firstRow) {
     var best = null;
-    var limit = Math.min(rows.length, 12);
-    for (var r = 0; r < limit; r++) {
+    var start = firstRow || 0;
+    var limit = Math.min(rows.length, start + 12);
+    for (var r = start; r < limit; r++) {
       var row = rows[r] || [];
       var cols = { date: -1, code: -1, name: -1, debit: -1, credit: -1, party: -1, partyCode: -1, summary: -1 };
       for (var c = 0; c < row.length; c++) {
@@ -96,34 +97,45 @@
       var c = header.cols.credit >= 0 ? toCents(row[header.cols.credit]) : null;
       if (!code && !name && d === null && c === null) continue;
       if (!code) { skipped++; continue; }
-      out.push({
+      var record = {
         code: code,
         name: name,
         debit: d || 0,
         credit: c || 0,
         party: partyCol >= 0 ? str(row[partyCol]).trim() : '',
         summary: header.cols.summary >= 0 ? str(row[header.cols.summary]).trim() : ''
-      });
+      };
+      if (d === null && str(row[header.cols.debit]).trim()) {
+        record.amountError = '第 ' + (r + 1) + ' 行借方金额读不出：「' + row[header.cols.debit] + '」';
+      } else if (c === null && str(row[header.cols.credit]).trim()) {
+        record.amountError = '第 ' + (r + 1) + ' 行贷方金额读不出：「' + row[header.cols.credit] + '」';
+      }
+      out.push(record);
     }
     return { records: out, skipped: skipped };
   }
 
-  /**
-   * 按科目筛选并汇总到客户。
-   * subject: 科目代码前缀（如 '2203'）或科目名称片段
-   */
   /** ERP 导出的「客户档案－XXX」前缀去掉，底稿里只留单位名 */
   function cleanParty(name) {
     return str(name).replace(/^客户档案\s*[－\-—–]\s*/, '').replace(/^客商\s*[－\-—–]\s*/, '').trim();
   }
 
+  function matchesSubject(record, key) {
+    return !key || norm(record.code).indexOf(key) === 0 || norm(record.name).indexOf(key) >= 0;
+  }
+
+  function findJournalAmountIssue(records, subject) {
+    var key = norm(subject);
+    return records.find(function (record) { return record.amountError && matchesSubject(record, key); });
+  }
+
+  /** 按科目代码前缀或科目名称片段筛选并汇总到客户。 */
   function summarizeByParty(records, subject) {
     var key = norm(subject);
     var map = Object.create(null), order = [];
     for (var i = 0; i < records.length; i++) {
       var rec = records[i];
-      var code = norm(rec.code), name = norm(rec.name);
-      if (key && !(code.indexOf(key) === 0 || name.indexOf(key) === 0 || name.indexOf(key) >= 0)) continue;
+      if (!matchesSubject(rec, key)) continue;
       var party = cleanParty(rec.party) || '（未填客户）';
       if (!map[party]) { map[party] = { party: party, debit: 0, credit: 0, count: 0 }; order.push(party); }
       map[party].debit += rec.debit;
@@ -141,48 +153,61 @@
 
   var D_NO = /^序号$|^编号$/;
   var D_NAME = /项目名称|客户名称|单位名称|明细|名称/;
-  var D_OPEN = /期初金额|期初数|期初余额/;
-  var D_DEBIT = /本期借方|借方发生/;
-  var D_CREDIT = /本期贷方|贷方发生/;
-  var D_CLOSE = /^期末金额$|期末余额|期末数/;
+  var D_AMOUNTS = {
+    open: { pattern: /期初金额|期初数|期初余额/, label: '期初金额' },
+    debit: { pattern: /本期借方|借方发生/, label: '本期借方' },
+    credit: { pattern: /本期贷方|贷方发生/, label: '本期贷方' },
+    close: { pattern: /^期末金额$|期末余额|期末数/, label: '期末金额' }
+  };
+
+  function detectDetailAmounts(row) {
+    var cols = {}, duplicates = [];
+    Object.keys(D_AMOUNTS).forEach(function (key) {
+      var field = D_AMOUNTS[key];
+      cols[key] = -1;
+      for (var c = 0; c < row.length; c++) {
+        var h = norm(row[c]);
+        if (!h || h.length > 14 || !field.pattern.test(h)) continue;
+        if (cols[key] >= 0) {
+          duplicates.push(field.label);
+          break;
+        }
+        cols[key] = c;
+      }
+    });
+    return { cols: cols, duplicates: duplicates };
+  }
 
   /**
    * 找明细表的两级表头：上行可能是「序号/项目名称/本期未审」，下行是「期初金额/本期借方…」
    * 返回列映射 + 数据起始行
    */
-  function detectDetail(rows) {
-    for (var r = 0; r < Math.min(rows.length, 20); r++) {
+  function detectDetail(rows, firstRow) {
+    var start = firstRow || 0;
+    for (var r = start; r < Math.min(rows.length, start + 20); r++) {
       var row = rows[r] || [];
-      var map = { no: -1, name: -1, open: -1, debit: -1, credit: -1, close: -1 };
+      var amounts = detectDetailAmounts(row);
+      var map = amounts.cols;
+      map.no = map.name = -1;
       for (var c = 0; c < row.length; c++) {
         var h = norm(str(row[c]));
         if (!h || h.length > 14) continue;
         if (map.no < 0 && D_NO.test(h)) map.no = c;
-        if (map.open < 0 && D_OPEN.test(h)) map.open = c;
-        if (map.debit < 0 && D_DEBIT.test(h)) map.debit = c;
-        if (map.credit < 0 && D_CREDIT.test(h)) map.credit = c;
-        if (map.close < 0 && D_CLOSE.test(h)) map.close = c;
         if (map.name < 0 && D_NAME.test(h)) map.name = c;
       }
       // 「序号 + 项目名称」这一行是分组行；金额列在下一行
       if (map.name >= 0 && (map.no >= 0 || map.open >= 0)) {
         var next = rows[r + 1] || [];
-        var m2 = { open: -1, debit: -1, credit: -1, close: -1 };
-        for (var c2 = 0; c2 < next.length; c2++) {
-          var h2 = norm(str(next[c2]));
-          if (!h2 || h2.length > 14) continue;
-          if (m2.open < 0 && D_OPEN.test(h2)) m2.open = c2;
-          if (m2.debit < 0 && D_DEBIT.test(h2)) m2.debit = c2;
-          if (m2.credit < 0 && D_CREDIT.test(h2)) m2.credit = c2;
-          if (m2.close < 0 && D_CLOSE.test(h2)) m2.close = c2;
-        }
-        if (map.open < 0) map.open = m2.open;
-        if (map.debit < 0) map.debit = m2.debit;
-        if (map.credit < 0) map.credit = m2.credit;
-        if (map.close < 0) map.close = m2.close;
+        var second = detectDetailAmounts(next);
+        var m2 = second.cols;
+        var duplicates = amounts.duplicates.concat(second.duplicates);
+        Object.keys(m2).forEach(function (key) {
+          if (map[key] < 0) map[key] = m2[key];
+        });
         var headerRow = (m2.open >= 0 || m2.debit >= 0) ? r + 1 : r;
         return {
-          usable: map.name >= 0 && map.debit >= 0 && map.credit >= 0,
+          usable: !duplicates.length && map.name >= 0 && map.debit >= 0 && map.credit >= 0,
+          error: duplicates.length ? '「' + duplicates[0] + '」列重复，请保留一个明确的写入列。' : '',
           headerRow: headerRow,
           groupRow: r,
           cols: map,
@@ -195,25 +220,88 @@
   }
 
   /**
-   * 找可填的空行：从表头下一行开始，跳过「一/二/三」这类分组标题行，
-   * 只看「项目名称」为空、且金额列没有公式的行。
+   * 找可填的空行。
+   *
+   * 明细表不是一直到底都空着：客户明细区下面还有账龄表、组合计提表，
+   * 那些地方也有空格，但填进去就错了。所以到第一个「合计」行就停。
+   * 分组（一、关联方 / 二、非关联方）单独列出来，让用户选往哪组填。
    */
-  function findBlankRows(rows, detail, isFormula) {
+  function findBlankRows(rows, detail, isFormula, opts) {
+    opts = opts || {};
     var out = [];
     var start = detail.headerRow + 1;
+    var endRow = opts.endRow === undefined ? rows.length : opts.endRow;
+    for (var r = start; r < endRow; r++) {
+      var row = rows[r] || [];
+      var nameCell = str(row[detail.cols.name]).trim();
+      // 合计行：客户明细区到此结束，后面的空格是别的表
+      if (/^(合计|小计|总计|合计数|合计金额)$/.test(nameCell)) break;
+      if (/^[一二三四五六七八九十]+$/.test(nameCell) || /合计|小计|总计/.test(nameCell)) continue;
+      if (nameCell) continue;                       // 已经有内容，不覆盖
+      // 名称格本身是公式 → 不是给人填的行
+      if (detail.cols.name >= 0 && isFormula(r, detail.cols.name)) continue;
+      // 这一行已经有金额了（哪怕没有名字）→ 多半是小计/说明行，不能往里塞客户
+      var isOccupied = opts.isOccupied || function () { return false; };
+      var occupied = false;
+      [detail.cols.open, detail.cols.debit, detail.cols.credit, detail.cols.close].forEach(function (c) {
+        if (c >= 0 && isOccupied(r, c)) occupied = true;
+      });
+      if (occupied) continue;
+      // 至少得有一列是空着能写的；全被公式占满的行没意义
+      // （很多模板「期末金额」整列是公式，那是它自己算的，不该拦住这行）
+      var writable = 0;
+      [detail.cols.open, detail.cols.debit, detail.cols.credit, detail.cols.close].forEach(function (c) {
+        if (c >= 0 && !isFormula(r, c)) writable++;
+      });
+      if (!writable) continue;
+      out.push(r);
+    }
+    return out;
+  }
+
+  /**
+   * 列出客户明细区里的分组（「一、关联方」「二、非关联方」），
+   * 每组的可填行。找不到分组就整块算一组。
+   */
+  function listGroups(rows, detail, isFormula, opts) {
+    opts = opts || {};
+    var start = detail.headerRow + 1;
+    var marks = [];
     for (var r = start; r < rows.length; r++) {
       var row = rows[r] || [];
       var nameCell = str(row[detail.cols.name]).trim();
-      var noCell = detail.cols.no >= 0 ? str(row[detail.cols.no]).trim() : '';
-      // 分组行：「一 / 二 / 三」或「合计」
-      if (/^[一二三四五六七八九十]+$/.test(nameCell) || /合计|小计|总计/.test(nameCell)) continue;
-      if (nameCell) continue;                       // 已经有内容，不覆盖
-      var hasFormula = false;
-      [detail.cols.open, detail.cols.debit, detail.cols.credit, detail.cols.close].forEach(function (c) {
-        if (c >= 0 && isFormula(r, c)) hasFormula = true;
+      if (/^(合计|小计|总计|合计数|合计金额)$/.test(nameCell)) break;
+      var isGroup = nameCell.length <= 24 && !/合计|小计|总计/.test(nameCell) &&
+        (/^[一二三四五六七八九十]+[、.．]?/.test(nameCell) || /关联方|组合计提|按款项性质/.test(nameCell)) &&
+        !/[为是]$|占比|金额为/.test(nameCell);
+      if (isGroup) marks.push({ row: r, title: nameCell });
+    }
+    // 没有分组标题：整块当一组
+    if (!marks.length) {
+      return [{
+        title: '（未分组）',
+        startRow: start,
+        endRow: rows.length,
+        blanks: findBlankRows(rows, detail, isFormula, opts)
+      }];
+    }
+    // 表头到第一个分组之间的行也算一组（有些表就这样开头）
+    if (marks[0].row > start) {
+      marks.unshift({ row: start, title: '（表头下）', synthetic: true });
+    }
+    var out = [];
+    for (var i = 0; i < marks.length; i++) {
+      var from = marks[i].synthetic ? marks[i].row : marks[i].row + 1;
+      var to = i + 1 < marks.length ? marks[i + 1].row : rows.length;
+      out.push({
+        title: marks[i].title,
+        startRow: from,
+        endRow: to,
+        blanks: findBlankRows(rows, detail, isFormula, {
+          endRow: to,
+          isOccupied: opts.isOccupied
+        }).filter(function (r) { return r >= from; })
       });
-      if (hasFormula) continue;                     // 公式格所在行不当空白行
-      out.push(r);
     }
     return out;
   }
@@ -228,6 +316,7 @@
    */
   function planWrites(parties, blanks, detail, opts) {
     opts = opts || {};
+    var canWrite = opts.canWrite || function () { return true; };
     var plan = [], problems = [];
     if (parties.length > blanks.length) {
       problems.push('客户有 ' + parties.length + ' 户，明细表只剩 ' + blanks.length + ' 个空行。' +
@@ -239,11 +328,17 @@
       var open = opts.openCents ? (opts.openCents[p.party] || 0) : 0;
       var close = open + p.debit - p.credit;
       var cells = [];
-      if (detail.cols.name >= 0) cells.push({ col: detail.cols.name, value: p.party, text: true });
-      if (detail.cols.open >= 0) cells.push({ col: detail.cols.open, value: open / 100 });
-      if (detail.cols.debit >= 0) cells.push({ col: detail.cols.debit, value: p.debit / 100 });
-      if (detail.cols.credit >= 0) cells.push({ col: detail.cols.credit, value: p.credit / 100 });
-      if (detail.cols.close >= 0) cells.push({ col: detail.cols.close, value: close / 100 });
+      // 逐格判断：公式格不写，让它自己算
+      var add = function (col, value, text) {
+        if (col < 0) return;
+        if (!canWrite(row, col)) return;
+        cells.push({ col: col, value: value, text: !!text });
+      };
+      add(detail.cols.name, p.party, true);
+      add(detail.cols.open, open / 100);
+      add(detail.cols.debit, p.debit / 100);
+      add(detail.cols.credit, p.credit / 100);
+      add(detail.cols.close, close / 100);
       plan.push({ row: row, party: p.party, cells: cells, debit: p.debit, credit: p.credit, close: close });
     }
     return { plan: plan, problems: problems };
@@ -272,23 +367,29 @@
     lines.push('Sub 填充底稿明细()');
     lines.push('    Dim ws As Worksheet');
     lines.push('    Set ws = ThisWorkbook.Worksheets("' + String(sheetName).replace(/"/g, '""') + '")');
-    if (opts.backup !== false) {
-      lines.push("    ' 先备份一份，填错了还能退回来");
-      lines.push('    ThisWorkbook.SaveCopyAs ThisWorkbook.Path & "\\" & ThisWorkbook.Name & ".bak.xlsx"');
-    }
+    var guards = [], writes = [];
     for (var i = 0; i < plan.length; i++) {
       var item = plan[i];
       for (var j = 0; j < item.cells.length; j++) {
         var cell = item.cells[j];
         var addr = colLetter(cell.col) + (item.row + 1);
-        if (cell.text) {
-          lines.push('    ws.Range("' + addr + '").Value = "' + String(cell.value).replace(/"/g, '""') + '"');
-        } else {
-          lines.push('    ws.Range("' + addr + '").Value = ' + Number(cell.value).toFixed(2));
-        }
+        var target = 'ws.Range("' + addr + '")';
+        guards.push('    If ' + target + '.HasFormula Or ' + target + '.HasArray Then GoTo FormulaFound');
+        writes.push('    ' + target + '.Value = ' + (cell.text
+          ? '"' + String(cell.value).replace(/"/g, '""') + '"'
+          : Number(cell.value).toFixed(2)));
       }
     }
+    lines = lines.concat(guards);
+    if (opts.backup !== false) {
+      lines.push("    ' 先备份一份，填错了还能退回来");
+      lines.push('    ThisWorkbook.SaveCopyAs ThisWorkbook.Path & "\\" & ThisWorkbook.Name & ".bak.xlsx"');
+    }
+    lines = lines.concat(writes);
     lines.push('    MsgBox "已填入 ' + plan.length + ' 户，公式未改动。"');
+    lines.push('    Exit Sub');
+    lines.push('FormulaFound:');
+    lines.push('    MsgBox "目标格包含公式，已停止，没有写入任何单元格。"');
     lines.push('End Sub');
     return lines.join('\r\n');
   }
@@ -324,9 +425,11 @@
     moneyText: moneyText,
     detectJournal: detectJournal,
     readJournal: readJournal,
+    findJournalAmountIssue: findJournalAmountIssue,
     summarizeByParty: summarizeByParty,
     detectDetail: detectDetail,
     findBlankRows: findBlankRows,
+    listGroups: listGroups,
     planWrites: planWrites,
     buildVBA: buildVBA,
     buildCsv: buildCsv,
