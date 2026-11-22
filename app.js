@@ -152,29 +152,27 @@
    * 认不出公式就看科目代码：2 负债 / 3 权益 → -1
    */
   function inferCloseSign(ws, detail, subject) {
-    var col = detail.cols.close, dbt = detail.cols.debit, crd = detail.cols.credit, opn = detail.cols.open;
+    var col = detail.cols.close, dbt = detail.cols.debit;
     if (ws && col >= 0 && dbt >= 0) {
-      var addr = XLSX.utils.encode_cell({ r: detail.headerRow + 1, c: col });
-      var cell = ws[addr];
-      // 表头下一行可能没公式，往后找几行
-      for (var k = 1; k <= 6 && (!cell || !cell.f); k++) {
-        cell = ws[XLSX.utils.encode_cell({ r: detail.headerRow + k, c: col })];
-      }
-      if (cell && cell.f) {
-        var expr = String(cell.f)
-          .replace(/^=?\s*ROUND\s*\(/i, '')
-          .replace(/,\s*[-\d.]+\s*\)\s*$/i, '');
+      // 表头下面几行里，跳过 SUM 小计（那是合计不是方向），找到第一个方向公式
+      for (var k = 1; k <= 10; k++) {
+        var cell = ws[XLSX.utils.encode_cell({ r: detail.headerRow + k, c: col })];
+        if (!cell || !cell.f) continue;
+        var f = String(cell.f).replace(/^=?\s*ROUND\s*\(/i, '').replace(/,\s*[-\d.]+\s*\)\s*$/i, '');
+        if (/^SUM\s*\(/i.test(f)) continue;
         var re = /([+-]?)\s*\$?([A-Z]{1,3})\$?\d+/g, m, cbt = 0;
-        while ((m = re.exec(expr))) {
-          var letter = m[2], colIdx = XLSX.utils.decode_col(letter);
-          if (colIdx !== dbt) continue;
+        while ((m = re.exec(f))) {
+          if (XLSX.utils.decode_col(m[2]) !== dbt) continue;
           cbt += m[1] === '-' ? -1 : 1;
         }
         if (cbt !== 0) return { sign: cbt > 0 ? 1 : -1, from: 'template' };
       }
     }
+    // 认不出公式：科目代码 2 负债 / 3 权益；再不然看科目名
     var s = String(subject || '').trim();
-    if (/^[23]/.test(s)) return { sign: -1, from: 'code' };
+    if (/^[23]/.test(s) || /预收|应付|应交|合同负债|递延收益|预计负债|短期借款|长期借款/.test(s)) {
+      return { sign: -1, from: 'code' };
+    }
     return { sign: 1, from: 'default' };
   }
 
