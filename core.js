@@ -121,7 +121,20 @@
   }
 
   function matchesSubject(record, key) {
-    return !key || norm(record.code).indexOf(key) === 0 || norm(record.name).indexOf(key) >= 0;
+    if (!key) return true;
+    var code = norm(record.code);
+    if (code === key) return true;
+    // 科目名直接包含
+    if (norm(record.name).indexOf(key) >= 0) return true;
+    if (code.indexOf(key) !== 0) return false;
+    var rest = code.slice(key.length);
+    if (!rest) return true;
+    // 1221.01 / 1221-01 这种带分隔符的
+    if (/^[.\-_/]/.test(rest)) return true;
+    // 纯数字尾：4-2-2 编码（1221 → 122101）算下级；
+    // 但 1221 → 12210 这种只多一位的是别的科目，不算
+    if (/^\d+$/.test(rest)) return rest.length === 2;
+    return false;
   }
 
   function findJournalAmountIssue(records, subject) {
@@ -226,6 +239,22 @@
    * 那些地方也有空格，但填进去就错了。所以到第一个「合计」行就停。
    * 分组（一、关联方 / 二、非关联方）单独列出来，让用户选往哪组填。
    */
+  /**
+   * 这一行是不是合计/小计行。
+   * 不要求整格恰好等于「合计」——实际底稿里有「合计：」「合  计」「本项目小计」
+   * 「2025年12月合计」各种写法，认漏了就会把客户填到合计行下面的账龄表里去。
+   */
+  function isTotalLabel(text) {
+    var v = norm(str(text)).replace(/[：:，,。.、\s]/g, '');
+    if (!v) return false;
+    return /(合计|小计|总计|共计|累计)/.test(v);
+  }
+  /** 明细区的总合计（而不是组内小计） */
+  function isGrandTotal(text) {
+    var v = norm(str(text)).replace(/[：:，,。.、\s]/g, '');
+    return /^(合计|总计|共计|累计|合计数|合计金额)$/.test(v) || /(^|[^本页本表])(合计|总计)$/.test(v);
+  }
+
   function findBlankRows(rows, detail, isFormula, opts) {
     opts = opts || {};
     var out = [];
@@ -234,13 +263,17 @@
     for (var r = start; r < endRow; r++) {
       var row = rows[r] || [];
       var nameCell = str(row[detail.cols.name]).trim();
-      // 合计行：客户明细区到此结束，后面的空格是别的表
-      if (/^(合计|小计|总计|合计数|合计金额)$/.test(nameCell)) break;
-      if (/^[一二三四五六七八九十]+$/.test(nameCell) || /合计|小计|总计/.test(nameCell)) continue;
+      // 合计/小计行：这段明细到此结束，后面的空格是别的表
+      if (isTotalLabel(nameCell)) break;
+      if ((opts.isHidden && opts.isHidden(r))) continue;   // 隐藏行不写，用户看不见
+      if (/^[一二三四五六七八九十]+$/.test(nameCell)) continue;
       if (nameCell) continue;                       // 已经有内容，不覆盖
       // 名称格本身是公式 → 不是给人填的行
       if (detail.cols.name >= 0 && isFormula(r, detail.cols.name)) continue;
       // 这一行已经有金额了（哪怕没有名字）→ 多半是小计/说明行，不能往里塞客户
+      // 合并区的从属格：写进去 Excel 会静默丢掉，不能当空行
+      var isMergedSub = opts.isMergedSubordinate || function () { return false; };
+      if (detail.cols.name >= 0 && isMergedSub(r, detail.cols.name)) continue;
       var isOccupied = opts.isOccupied || function () { return false; };
       var occupied = false;
       [detail.cols.open, detail.cols.debit, detail.cols.credit, detail.cols.close].forEach(function (c) {
@@ -267,41 +300,54 @@
     opts = opts || {};
     var start = detail.headerRow + 1;
     var marks = [];
+    var grandRow = -1;
     for (var r = start; r < rows.length; r++) {
       var row = rows[r] || [];
       var nameCell = str(row[detail.cols.name]).trim();
-      if (/^(合计|小计|总计|合计数|合计金额)$/.test(nameCell)) break;
+      // 总合计：明细区到此为止
+      if (isGrandTotal(nameCell) && grandRow < 0) { grandRow = r; break; }
+      if (isTotalLabel(nameCell)) continue;          // 组内小计：是边界，不是终点
       var isGroup = nameCell.length <= 24 && !/合计|小计|总计/.test(nameCell) &&
         (/^[一二三四五六七八九十]+[、.．]?/.test(nameCell) || /关联方|组合计提|按款项性质/.test(nameCell)) &&
         !/[为是]$|占比|金额为/.test(nameCell);
       if (isGroup) marks.push({ row: r, title: nameCell });
     }
-    // 没有分组标题：整块当一组
+    var areaEnd = grandRow >= 0 ? grandRow : rows.length;
+    // 没有分组标题：整块当一组（表头下方到合计行之前）
     if (!marks.length) {
       return [{
         title: '（未分组）',
         startRow: start,
-        endRow: rows.length,
+        endRow: areaEnd,
         blanks: findBlankRows(rows, detail, isFormula, opts)
       }];
     }
-    // 表头到第一个分组之间的行也算一组（有些表就这样开头）
-    if (marks[0].row > start) {
-      marks.unshift({ row: start, title: '（表头下）', synthetic: true });
-    }
     var out = [];
     for (var i = 0; i < marks.length; i++) {
-      var from = marks[i].synthetic ? marks[i].row : marks[i].row + 1;
-      var to = i + 1 < marks.length ? marks[i + 1].row : rows.length;
+      var from = marks[i].row + 1;
+      var to = i + 1 < marks.length ? marks[i + 1].row : areaEnd;
       out.push({
         title: marks[i].title,
         startRow: from,
         endRow: to,
         blanks: findBlankRows(rows, detail, isFormula, {
           endRow: to,
-          isOccupied: opts.isOccupied
-        }).filter(function (r) { return r >= from; })
+          isOccupied: opts.isOccupied,
+          isMergedSubordinate: opts.isMergedSubordinate,
+          isHidden: opts.isHidden
+        }).filter(function (rr) { return rr >= from; })
       });
+    }
+    // 表头下有行、但第一个分组标题之前也有空行：单独成组，排在最后，不抢默认
+    if (marks.length && marks[0].row > start) {
+      var headBlanks = findBlankRows(rows, detail, isFormula, {
+        endRow: marks[0].row,
+        isOccupied: opts.isOccupied,
+        isMergedSubordinate: opts.isMergedSubordinate
+      }).filter(function (rr) { return rr >= start && rr < marks[0].row; });
+      if (headBlanks.length) {
+        out.push({ title: '（分组标题以上）', startRow: start, endRow: marks[0].row, blanks: headBlanks });
+      }
     }
     return out;
   }
@@ -317,6 +363,7 @@
   function planWrites(parties, blanks, detail, opts) {
     opts = opts || {};
     var canWrite = opts.canWrite || function () { return true; };
+    var isMergedSub = opts.isMergedSubordinate || function () { return false; };
     var plan = [], problems = [];
     // 空行不够不再拒绝：Excel 本来就该插行，插进去公式会跟着往下走。
     // 这里算出缺几行、从哪一行续，宏里负责插。
@@ -334,6 +381,7 @@
       // 新插出来的行还没有公式（宏会先复制上一行再写），这里照样写。
       var add = function (col, value, text) {
         if (col < 0) return;
+        if (isMergedSub(row, col)) return;          // 合并区从属格写进去会丢
         if (row <= lastBlank && !canWrite(row, col)) return;
         cells.push({ col: col, value: value, text: !!text });
       };
@@ -364,6 +412,13 @@
       c = Math.floor((c - 1) / 26);
     }
     return s;
+  }
+
+  /** VBA 字符串字面量：双引号成对转义，换行拆成 Chr(10) 拼接（否则 .bas 编译不过） */
+  function vbaString(value) {
+    var parts = String(value).split(/\r\n|\r|\n/);
+    var escaped = parts.map(function (seg) { return '"' + seg.replace(/"/g, '""') + '"'; });
+    return escaped.join(' & Chr(10) & ');
   }
 
   /** 生成 VBA：只写计划里的格，绝不碰公式；不够的行自动插，公式跟着复制 */
@@ -400,8 +455,9 @@
         var addr = colLetter(cell.col) + (item.row + 1);
         var target = 'ws.Range("' + addr + '")';
         guards.push('    If ' + target + '.HasFormula Or ' + target + '.HasArray Then GoTo FormulaFound');
+        guards.push('    If ' + target + '.MergeCells And ' + target + '.Address <> ' + target + '.MergeArea.Cells(1).Address Then GoTo MergeFound');
         writes.push('    ' + target + '.Value = ' + (cell.text
-          ? '"' + String(cell.value).replace(/"/g, '""') + '"'
+          ? vbaString(cell.value)
           : Number(cell.value).toFixed(2)));
       }
     }
@@ -412,6 +468,9 @@
     lines.push('    Exit Sub');
     lines.push('FormulaFound:');
     lines.push('    MsgBox "目标格包含公式，已停止，没有写入任何单元格。"');
+    lines.push('    Exit Sub');
+    lines.push('MergeFound:');
+    lines.push('    MsgBox "目标格是合并单元格的一部分，写进去会被 Excel 丢掉，已停止。"');
     lines.push('End Sub');
     return lines.join('\r\n');
   }

@@ -30,6 +30,21 @@
     var rows = XLSX.utils.sheet_to_json(ws, { header: 1, range: range, raw: true, defval: null, blankrows: true });
     return { rows: new Array(range.s.r).concat(rows), firstRow: range.s.r };
   }
+  function mergeRanges(ws) {
+    return (ws["!merges"] || []).map(function (m) { return { s: m.s, e: m.e }; });
+  }
+  function isMergedAnchor(ranges, r, c) {
+    return ranges.some(function (rg) { return rg.s.r === r && rg.s.c === c; });
+  }
+  /** 合并区里但不是我这一格（即从属格）→ 写进去 Excel 会丢 */
+  function isMergedSubordinate(ranges, r, c) {
+    return ranges.some(function (rg) {
+      var inside = r >= rg.s.r && r <= rg.e.r && c >= rg.s.c && c <= rg.e.c;
+      var anchor = rg.s.r === r && rg.s.c === c;
+      return inside && !anchor;
+    });
+  }
+
   function arrayRanges(ws) {
     return Object.keys(ws).filter(function (addr) {
       return ws[addr].f && ws[addr].F;
@@ -175,8 +190,11 @@
     var ws = state.tplWb.Sheets[state.sheetName];
     var isF = formulaChecker(ws);
     var ranges = arrayRanges(ws);
+    var merges = mergeRanges(ws);
     state.groups = Core.listGroups(state.rows, state.detail, isF, {
-      isOccupied: function (r, c) { return cellHasValue(ws, r, c) || inArray(ranges, r, c); }
+      isOccupied: function (r, c) { return cellHasValue(ws, r, c) || inArray(ranges, r, c); },
+      isMergedSubordinate: function (r, c) { return isMergedSubordinate(merges, r, c); },
+      isHidden: function (r) { var info = (ws["!rows"] || [])[r]; return !!(info && info.hidden); }
     });
 
     var gi = Number($('groupSel').value || 0);
@@ -191,7 +209,8 @@
         ' 行），一组填完不会串到下一组。要填别的组请在上面切换。');
     }
     var res = Core.planWrites(parties, state.blanks, state.detail, {
-      canWrite: function (r, c) { return !isF(r, c); }
+      canWrite: function (r, c) { return !isF(r, c); },
+      isMergedSubordinate: function (r, c) { return isMergedSubordinate(merges, r, c); }
     });
     state.plan = res.plan;
     state.missing = res.missing || 0;
