@@ -530,20 +530,22 @@
     lines = lines.concat(writes);
     if (willInsert) {
       lines.push('    Dim result As String');
-      lines.push('    result = "已填入 ' + plan.length + ' 户，并插入 ' + missing + ' 行。"');
+      lines.push('    result = "已填入 ' + plan.length + ' 户，插入了 ' + missing + ' 行。"');
       lines.push('    If expandTotals Then');
       lines.push('        For Each change In totalChanges');
       lines.push('            ws.Cells(change(0), change(1)).Formula = change(2)');
       lines.push('        Next change');
-      lines.push('        result = result & "已扩展 " & totalChanges.Count & " 个合计公式，所选合计已包含新增行。"');
+      lines.push('        result = result & vbCrLf & "扩了 " & totalChanges.Count & ' +
+        '" 个合计公式的范围，合计已含新增行。"');
       lines.push('    ElseIf totalChanges.Count > 0 Then');
-      lines.push('        result = result & "未扩展 " & totalChanges.Count & " 个合计公式。这些合计漏计新增行，需要核对。"');
+      lines.push('        result = result & vbCrLf & totalChanges.Count & ' +
+        '" 个合计公式的范围没动，它们会漏掉新增行，需要你自己核一下。"');
       lines.push('    Else');
-      lines.push('        result = result & "未发现可扩展的单列 SUM，未手动改写合计公式。"');
+      lines.push('        result = result & vbCrLf & "新行插在合计公式的范围内，Excel 已自动把它算进去，公式没动。"');
       lines.push('    End If');
-      lines.push('    Say result & vbCrLf & "请核对其他合计公式是否包含新增行。"');
+      lines.push('    Say result');
     } else {
-      lines.push('    Say "已填入 ' + plan.length + ' 户。公式未改动。"');
+      lines.push('    Say "已填入 ' + plan.length + ' 户。公式没动。"');
     }
     lines.push('    Exit Sub');
     lines.push('FormulaFound:');

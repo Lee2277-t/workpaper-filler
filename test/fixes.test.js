@@ -119,8 +119,9 @@ runSuite('缺陷回归', {
     for (const [row, amount] of [[4, 100], [5, 200], [6, 300], [7, 400]]) {
       check.match(vba, new RegExp(`^    ws\\.Range\\("F${row}"\\)\\.Value = ${amount}\\.00$`, 'm'));
     }
-    check.match(vba, /未扩展.*漏计新增行，需要核对/);
-    check.match(vba, /已扩展.*合计已包含新增行/);
+    check.match(vba, /新行插在合计公式的范围内，Excel 已自动把它算进去/);
+    check.match(vba, /个合计公式的范围没动，它们会漏掉新增行/);
+    check.match(vba, /扩了 .* 个合计公式的范围，合计已含新增行/);
   },
   async '7b 合计范围止于插入点之前时才提示，默认不扩'(check) {
     const rows = detailRows(2);
