@@ -217,24 +217,22 @@ console.log('\n[版本号一致]');
 console.log('\n[纵向合并]');
 {
   const d2 = { cols: { name: 1, open: 2, debit: 3, credit: 4, close: 5 }, headerRow: 0 };
-  // 两行一户：B3:B4、B5:B6 纵向合并（0基 2:3、4:5），合计在第 7 行
+  // 两行一户：B3:B4、B5:B6 纵向合并。真 Excel 里插行会把合并区整体下移，
+  // 写锚点格不会丢数，所以 core 不硬拦，只在界面上提示版式是「一户两行」
   const merges = [{ s: { r: 2, c: 1 }, e: { r: 3, c: 1 } }, { s: { r: 4, c: 1 }, e: { r: 5, c: 1 } }];
   const isSub = (r, cc) => merges.some(m => r >= m.s.r && r <= m.e.r && cc >= m.s.c && cc <= m.e.c && !(m.s.r === r && m.s.c === cc));
-  const span = (r, cc) => { for (const m of merges) { if (r >= m.s.r && r <= m.e.r && cc >= m.s.c && cc <= m.e.c) return { top: m.s.r, bottom: m.e.r }; } return null; };
   const res = Core.planWrites(
     [{ party: '甲', debit: 100, credit: 0 }, { party: '乙', debit: 200, credit: 0 }, { party: '丙', debit: 300, credit: 0 }],
-    [2, 4], d2, { isMergedSubordinate: isSub, mergeSpan: span });
-  eq(res.plan.length, 2, '要插进来的行会落进纵向合并区，整户不填');
-  ok(res.problems.join('').indexOf('丙 第 6 行') >= 0, '说清楚是哪一户哪一行');
+    [2, 4], d2, { isMergedSubordinate: isSub });
+  eq(res.plan.length, 3, '纵向合并区的锚点格可以写，不整户拦下');
 
-  // 横向合并的合计行不能反过来把客户挡掉
+  // 横向合并的合计行也不能把客户挡掉
   const merges2 = [{ s: { r: 4, c: 0 }, e: { r: 4, c: 5 } }];
   const isSub2 = (r, cc) => merges2.some(m => r >= m.s.r && r <= m.e.r && cc >= m.s.c && cc <= m.e.c && !(m.s.r === r && m.s.c === cc));
-  const span2 = (r, cc) => { for (const m of merges2) { if (r >= m.s.r && r <= m.e.r && cc >= m.s.c && cc <= m.e.c) return { top: m.s.r, bottom: m.e.r }; } return null; };
   const res2 = Core.planWrites(
-    [{ party: '甲', debit: 100, credit: 0 }, { party: '乙', debit: 200, credit: 0 }, { party: '丙', debit: 300, credit: 0 }],
-    [2, 3], d2, { isMergedSubordinate: isSub2, mergeSpan: span2 });
-  eq(res2.plan.length, 3, '横向合并的合计行挡不住客户');
+    [{ party: '甲', debit: 100, credit: 0 }, { party: '乙', debit: 200, credit: 0 }],
+    [2, 3], d2, { isMergedSubordinate: isSub2 });
+  eq(res2.plan.length, 2, '横向合并的合计行挡不住客户');
 }
 
 console.log('\n[生成宏]');

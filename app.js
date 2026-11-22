@@ -160,8 +160,14 @@
         if (!cell || !cell.f) continue;
         var f = String(cell.f).replace(/^=?\s*ROUND\s*\(/i, '').replace(/,\s*[-\d.]+\s*\)\s*$/i, '');
         if (/^SUM(IF|IFS)?\s*\(/i.test(f)) continue;          // 汇总公式不是方向公式
+        // IF 包着的方向公式：=IF(B3="",0,ROUND(D3-E3+F3,2))
+        // 条件里的引用（B3）不是金额，不能算进三列，否则整条被判掉、退回默认方向
+        var body = f;
+        var mRound = body.match(/ROUND\s*\(([^()]*)\)/i);
+        if (mRound) body = mRound[1];
+        else if (/^IF\s*\(/i.test(body)) body = body.replace(/^IF\s*\([^,]*,\s*[^,]*,\s*/i, '').replace(/\)\s*$/, '');
         var re = /([+-]?)\s*\$?([A-Z]{1,3})\$?(\d+)/g, m, cbt = 0, seen = [], ok = true;
-        while ((m = re.exec(f))) {
+        while ((m = re.exec(body))) {
           var ci = XLSX.utils.decode_col(m[2]);
           seen.push(ci);
           if (ci === dbt) cbt += m[1] === '-' ? -1 : 1;
@@ -236,15 +242,6 @@
     state.groups = Core.listGroups(state.rows, state.detail, isF, {
       isOccupied: function (r, c) { return cellHasValue(ws, r, c) || inArray(ranges, r, c); },
       isMergedSubordinate: function (r, c) { return isMergedSubordinate(merges, r, c); },
-      mergeSpan: function (r, c) {
-        for (var i = 0; i < merges.length; i++) {
-          var m = merges[i];
-          if (r >= m.s.r && r <= m.e.r && c >= m.s.c && c <= m.e.c) {
-            return { top: m.s.r, bottom: m.e.r };
-          }
-        }
-        return null;
-      },
       isHidden: function (r) { var info = (ws["!rows"] || [])[r]; return !!(info && info.hidden); }
     });
 
@@ -280,6 +277,14 @@
     state.missing = res.missing || 0;
     state.insertAfter = res.insertAfter;
     state.problems = state.problems.concat(res.problems);
+    // 两行一户的模板（明细区里有上下合并）：工具按一户一行填，填完得自己看第二行
+    var tallMerge = merges.filter(function (m) {
+      return m.e.r > m.s.r && m.e.r >= (state.blanks[0] === undefined ? 0 : state.blanks[0]);
+    })[0];
+    if (tallMerge && res.plan.length) {
+      state.problems.push('明细区里有上下合并的单元格（第 ' + (tallMerge.s.r + 1) + '–' + (tallMerge.e.r + 1) +
+        ' 行那种，通常是「一户占两行」的版式）。工具按一户一行填，填完请核对第二行是不是空的。');
+    }
     renderAll();
   }
 
@@ -315,6 +320,11 @@
         : (state.closeSignFrom === 'unknown' ? '共同类，请自己核' : '默认'));
     html += '<div class="stat"><span class="k">期末方向</span><span class="v">' + dir +
       '（' + from + '）</span></div>';
+    if (state.closeSignFrom === 'unknown') {
+      html += '<div class="note warn" style="margin-top:8px">科目 ' + esc($('subject').value) +
+        ' 是共同类，借贷方向不固定，工具认不出方向，期末按「期初 + 借 − 贷」算。' +
+        '期末列是公式时不受影响；不是公式的话请自己核一下这个数。</div>';
+    }
     html += '<div class="stat"><span class="k">明细表空行</span><span class="v">' + state.blanks.length + ' 行</span></div>';
     $('statBox').innerHTML = html;
   }

@@ -15,7 +15,7 @@
 })(typeof self !== 'undefined' ? self : this, function () {
   'use strict';
 
-  var VERSION = '0.3.3';
+  var VERSION = '0.3.4';
 
   /* ---------------- 基础 ---------------- */
 
@@ -415,7 +415,6 @@
     opts = opts || {};
     var canWrite = opts.canWrite || function () { return true; };
     var isMergedSub = opts.isMergedSubordinate || function () { return false; };
-    var mergeSpan = opts.mergeSpan || null;
     var plan = [], problems = [], missingOpen = [], mergedOut = [];
     // 空行数为 0 时无法判断从哪一行开始续，硬算会把客户写进标题行/表头
     if (!blanks.length) {
@@ -439,25 +438,10 @@
       var cells = [];
       // 新插的行是照最后一行复制的，公式和合并都一起下来了：一律按模板行判断
       var refRow = row <= lastBlank ? row : lastBlank;
-      var isInserted = row > lastBlank;
-      /**
-       * 这一格能不能写。
-       * 已存在的行：看它自己是不是合并从属格。
-       * 要插出来的行：看模板行；另外如果插行点所在的那块合并区**往下延伸**
-       * （比如 B5:B6 这种纵向两行一户），插进来的行会落在合并区里面，写进去也会丢。
-       */
-      var mergeBlocked = function (col) {
-        if (isMergedSub(refRow, col)) return true;
-        if (isInserted && mergeSpan) {
-          var sp = mergeSpan(lastBlank, col);
-          if (sp && sp.bottom > lastBlank) return true;
-        }
-        return false;
-      };
       // 逐格判断：公式格不写，让它自己算。
       var add = function (col, value, text) {
         if (col < 0) return;
-        if (mergeBlocked(col)) return;              // 合并区从属格写进去会丢
+        if (isMergedSub(refRow, col)) return;       // 合并区从属格写进去会丢
         if (!canWrite(refRow, col)) return;
         cells.push({ col: col, value: value, text: !!text });
       };
@@ -467,7 +451,7 @@
       var blocked = null;
       for (var w = 0; w < wanted.length; w++) {
         var wc = wanted[w];
-        if (wc >= 0 && mergeBlocked(wc)) { blocked = wc; break; }
+        if (wc >= 0 && isMergedSub(refRow, wc)) { blocked = wc; break; }
       }
       if (blocked !== null) {
         mergedOut.push({ party: p.party, row: row, col: blocked });

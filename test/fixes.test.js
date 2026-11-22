@@ -276,4 +276,16 @@ runSuite('缺陷回归', {
     const out = await exportDetail(app);
     check.equal(out.F3?.v, 300, '预收：期末 = 0 - 0 + 300 = 300（负债方向）');
   },
+
+  async '15 明细区有纵向合并时提示「一户两行」版式'(check) {
+    const rows = detailRows(5);
+    const template = workbook({ 明细: rows });
+    template.Sheets.明细['!merges'] = ['B4:B5', 'B6:B7'].map(XLSX.utils.decode_range);
+    const app = await prepareDetail(template, journal([
+      ['2026-01-05', '1221', '其他应收款', '合成甲', 100, 0],
+      ['2026-01-06', '1221', '其他应收款', '合成乙', 200, 0]
+    ]));
+    check.match(app.el('infoBox').innerHTML, /上下合并的单元格/);
+    check.match(app.el('infoBox').innerHTML, /一户一行填/);
+  },
 });
